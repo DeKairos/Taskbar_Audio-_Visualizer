@@ -1,0 +1,27 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+venv_win/
+.venv/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Logs/runtime
+*.log
+
+# Editor/system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Local config
+.audio_visualizer.json
