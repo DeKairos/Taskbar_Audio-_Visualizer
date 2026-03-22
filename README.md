@@ -10,7 +10,7 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 - **Taskbar Integration**: Sits on the left side of your Windows taskbar as a transparent overlay
 - **Click-Through**: All clicks pass through the visualizer to the taskbar/apps below
 - **Album Art Integration**: Automatically extracts dominant color from now-playing album art
-- **Now-Playing Intro Card**: On track change, a two-line card (title + artist/album) appears briefly and fades out
+- **Now-Playing Intro Card**: Shows once initially, then appears on-demand when you click the visualizer area
 - **Multiple Themes**: 5 built-in color presets + dynamic album art colors
 - **Multiple Modes**: Bars, waveform, and mirror visualization modes
 - **Auto-Hide**: Fades out when silent, returns when sound plays
@@ -22,7 +22,7 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 ✅ **Beat Detection** — Flash effect synced to bass frequencies
 ✅ **Smooth Animations** — 33 FPS rendering with fast attack/slow decay
 ✅ **Glow Effects** — Radial gradients for depth and luminosity
-✅ **Now-Playing Display** — Full now-playing card (title + artist/album) appears on track change, then fades out
+✅ **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
 ✅ **Auto-Start** — Registry integration to run with Windows
 ✅ **Configuration Persistence** — Settings saved to JSON
 ✅ **Multiple Visualization Modes** — Bars, waveform, and symmetric mirror modes
@@ -36,6 +36,7 @@ audio_visualizer/
 ├── main.py                 # Entry point, initializes all components
 ├── visualizer_window.py    # Main rendering window, positioning, click-through
 ├── audio_capture.py        # Audio thread, FFT processing
+├── input_hooks.py          # Global mouse hook for click-triggered media overlay
 ├── volume_control.py       # Volume feature module (currently disabled)
 ├── media_monitor.py        # Windows media session polling, album art color extraction
 ├── tray_manager.py         # System tray icon and context menu
@@ -65,7 +66,7 @@ audio_visualizer/
   - **Mirror**: Symmetric bars growing from center line
 - Auto-hide logic with opacity fading
 - Beat detection on low-frequency bins (bass)
-- Overlays for volume display and a track-change now-playing intro card
+- Overlays for volume display and a now-playing card (initial auto-show + click trigger)
 
 #### `audio_capture.py`
 
@@ -76,6 +77,12 @@ audio_visualizer/
 - Computes real FFT, converts to dB scale, normalizes
 - Buckets frequency bins into 64 bars (configurable)
 - Emits via Qt signal
+
+#### `input_hooks.py`
+
+- Provides global low-level mouse hook helpers for visualizer interactions
+- Detects left-click over visualizer rectangle while preserving overlay click-through
+- Triggers on-demand now-playing overlay display
 
 #### `volume_control.py`
 
@@ -133,7 +140,7 @@ paintEvent()
 ↓ Get current theme (from config or album art color)
 ↓ Loop over bars → compute color from theme
 ↓ Draw glow gradients + bars
-↓ Overlay beat flash and now-playing intro card (on track change)
+↓ Overlay beat flash and now-playing intro card (initially, then on click)
     ↓
 [Render to Screen] (transparent, click-through)
 ```
@@ -146,6 +153,10 @@ Extract title, artist, album, album art thumbnail
 Dominant color extraction (PIL)
     ↓
 Update visualizer theme (album art override)
+
+[InputHooks] Detect click over visualizer area
+    ↓
+Request now-playing overlay in UI thread
 
 [VolumeScroller] (optional module, currently disabled)
 ```
@@ -176,12 +187,12 @@ SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
 - Gets button rect: `GetWindowRect()` → converts physical to logical pixels via DPI ratio
 - Visualizer positioned to left of button with 8px padding
 
-#### Low-Level Mouse Hook
+#### Low-Level Mouse Hooks
 
 ```python
-# Global hook for scroll wheel detection
+# Global hook for scroll and click detection
 user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0)
-# Callback receives all mouse events, filters for WM_MOUSEWHEEL
+# Callback receives all mouse events, filters for WM_MOUSEWHEEL / WM_LBUTTONDOWN
 # Checks if cursor is within visualizer geometry
 ```
 
@@ -368,7 +379,7 @@ The installer uses `assets/app_icon.ico` for setup branding and Start menu short
 ⚠️ **No Direct Audio Input**: Only captures system audio via loopback (no microphone)
 ⚠️ **Taskbar Height Fixed**: Assumes standard 40-48 px taskbar
 ⚠️ **Album Art Extraction**: Depends on app providing thumbnail (Spotify, Windows Media Player work; browser players may not)
-⚠️ **Now-Playing Trigger**: Intro card shows only when metadata changes
+⚠️ **Now-Playing Trigger**: Intro card auto-shows once, then requires click over visualizer area
 ⚠️ **No Multi-Monitor**: Visualizer only works on primary screen
 
 ## Future Ideas

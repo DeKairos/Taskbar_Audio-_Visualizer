@@ -8,10 +8,10 @@ import ctypes.wintypes
 import time
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QTimer, QPointF, QEvent
+from PyQt6.QtCore import Qt, QTimer, QPointF, QEvent, QRectF, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QBrush, QPen, QPainterPath,
-    QRadialGradient, QLinearGradient, QFont,
+    QRadialGradient, QLinearGradient, QFont, QPixmap,
 )
 from color_themes import get_theme, bar_color
 
@@ -34,6 +34,8 @@ user32 = ctypes.windll.user32
 
 
 class VisualizerWindow(QWidget):
+    media_overlay_requested = pyqtSignal()
+
     def __init__(self, config: dict):
         super().__init__()
         self.cfg = config
@@ -65,6 +67,15 @@ class VisualizerWindow(QWidget):
         self._media_overlay_duration = 3.5
         self._media_overlay_fade = 1.2
         self._media_overlay_alpha = 0.0
+        self._media_initial_auto_shown = False
+
+        # Track-change morph: bars briefly collapse to center and re-expand.
+        self._track_morph_started_at = 0.0
+        self._track_morph_duration = 0.58
+
+        # Startup intro animation state.
+        self._startup_started_at = time.monotonic()
+        self._startup_duration = 2.2
 
         # Runtime keep-alive counter for z-order/style refresh cadence.
         self._style_refresh_counter = 0
@@ -72,6 +83,10 @@ class VisualizerWindow(QWidget):
         # External modules (set by main.py)
         self.volume_scroller = None
         self.media_monitor = None
+        self.media_click_watcher = None
+
+        # Thread-safe trigger from global mouse hook.
+        self.media_overlay_requested.connect(self._show_media_overlay_on_demand)
 
         # Repaint timer (~33 fps)
         self.timer = QTimer()
@@ -337,7 +352,7 @@ class VisualizerWindow(QWidget):
         self.update()
 
     def _update_media_overlay_state(self):
-        """Show now-playing briefly on change, then fade it out."""
+        """Auto-show now-playing once initially; later show only on click trigger."""
         if not self.media_monitor:
             self._media_overlay_alpha = 0.0
             return
@@ -350,7 +365,10 @@ class VisualizerWindow(QWidget):
 
         now = time.time()
         if media.changed:
-            self._media_overlay_started_at = now
+            if not self._media_initial_auto_shown:
+                self._media_overlay_started_at = now
+                self._track_morph_started_at = now
+                self._media_initial_auto_shown = True
             media.changed = False
 
         if self._media_overlay_started_at <= 0:
@@ -367,6 +385,21 @@ class VisualizerWindow(QWidget):
             )
         else:
             self._media_overlay_alpha = 0.0
+
+    def request_media_overlay(self):
+        """Request media overlay display from non-Qt threads safely."""
+        self.media_overlay_requested.emit()
+
+    def _show_media_overlay_on_demand(self):
+        """Show now-playing overlay when user clicks visualizer area."""
+        if not self.media_monitor:
+            return
+        media = self.media_monitor.info
+        if not media.title:
+            return
+        now = time.time()
+        self._media_overlay_started_at = now
+        self._track_morph_started_at = now
 
     def _resolve_theme(self) -> dict:
         """Return the active color theme, applying album-art color only in dynamic mode."""
@@ -386,6 +419,50 @@ class VisualizerWindow(QWidget):
 
         return theme
 
+    def _startup_progress(self) -> float:
+        """0.0->1.0 progress for initial reveal animation."""
+        elapsed = time.monotonic() - self._startup_started_at
+        if self._startup_duration <= 0:
+            return 1.0
+        return max(0.0, min(1.0, elapsed / self._startup_duration))
+
+    def _track_morph_amount(self) -> float:
+        """Return 0..1 intensity for the track-change morph animation."""
+        if self._track_morph_started_at <= 0:
+            return 0.0
+
+        elapsed = time.time() - self._track_morph_started_at
+        if elapsed <= 0 or elapsed >= self._track_morph_duration:
+            return 0.0
+
+        progress = elapsed / self._track_morph_duration
+        triangle = 1.0 - abs((2.0 * progress) - 1.0)
+        return max(0.0, min(1.0, triangle * triangle))
+
+    def _stereo_split_gains(self):
+        """Pseudo-stereo shaping: left favors low-mid, right favors high-mid."""
+        n = len(self.fft_data)
+        if n <= 0:
+            return 1.0, 1.0
+
+        low_end = max(4, int(n * 0.25))
+        high_start = max(6, int(n * 0.35))
+        high_end = max(high_start + 1, int(n * 0.78))
+
+        low_band = self.fft_data[2:low_end] if low_end > 2 else self.fft_data[:low_end]
+        high_band = self.fft_data[high_start:high_end]
+
+        low_energy = float(np.mean(low_band)) if len(low_band) else 0.0
+        high_energy = float(np.mean(high_band)) if len(high_band) else 0.0
+        peak = max(float(np.max(self.fft_data)), 1e-6)
+
+        low_norm = max(0.0, min(1.0, low_energy / peak))
+        high_norm = max(0.0, min(1.0, high_energy / peak))
+
+        left_gain = 0.88 + (0.52 * low_norm)
+        right_gain = 0.88 + (0.52 * high_norm)
+        return left_gain, right_gain
+
     # ====================== PAINTING =================================
 
     def paintEvent(self, event):
@@ -396,13 +473,47 @@ class VisualizerWindow(QWidget):
         h = self.height()
 
         mode = self.cfg.get("mode", "bars")
+        intro_t = self._startup_progress()
+        morph = self._track_morph_amount()
 
-        if mode == "wave":
-            self._paint_waveform(p, w, h)
-        elif mode == "mirror":
-            self._paint_mirror(p, w, h)
+        if morph > 0.001:
+            p.save()
+            cx = w / 2.0
+            squeeze = 1.0 - (0.62 * morph)
+            p.translate(cx, 0)
+            p.scale(squeeze, 1.0)
+            p.translate(-cx, 0)
+
+        # Initial reveal: bars slide in from left during startup intro.
+        if intro_t < 1.0:
+            eased = 1.0 - ((1.0 - intro_t) ** 3)
+            reveal_w = max(1, int(w * max(0.08, eased)))
+            p.save()
+            p.setClipRect(0, 0, reveal_w, h)
+
+            if mode == "wave":
+                self._paint_waveform(p, w, h)
+            elif mode == "mirror":
+                self._paint_mirror(p, w, h)
+            else:
+                self._paint_bars(p, w, h)
+            p.restore()
         else:
-            self._paint_bars(p, w, h)
+            if mode == "wave":
+                self._paint_waveform(p, w, h)
+            elif mode == "mirror":
+                self._paint_mirror(p, w, h)
+            else:
+                self._paint_bars(p, w, h)
+
+        if morph > 0.001:
+            p.restore()
+            # Tint briefly with current accent color during the morph.
+            theme = self._resolve_theme()
+            br, bg, bb = theme["base"]
+            wash_alpha = int(55 * morph)
+            if wash_alpha > 0:
+                p.fillRect(0, 0, w, h, QColor(br, bg, bb, wash_alpha))
 
         # Beat flash overlay
         if self._beat_flash > 0.01:
@@ -421,7 +532,42 @@ class VisualizerWindow(QWidget):
         ):
             self._paint_media_overlay(p, w, h, self._media_overlay_alpha)
 
+        if intro_t < 1.0:
+            self._paint_startup_intro(p, w, h, intro_t)
+
         p.end()
+
+    def _paint_startup_intro(self, p: QPainter, w: int, h: int, t: float):
+        """Draw a short cinematic sweep on startup."""
+        t = max(0.0, min(1.0, t))
+        fade = 1.0 - t
+
+        # Brief dark veil so reveal feels intentional.
+        veil_alpha = int(90 * (fade ** 1.4))
+        if veil_alpha > 0:
+            p.fillRect(0, 0, w, h, QColor(0, 0, 0, veil_alpha))
+
+        # Cyan sweep that glides across once.
+        sweep_w = max(50, int(w * 0.34))
+        sweep_center = int((t * 1.35 - 0.2) * w)
+        grad = QLinearGradient(sweep_center - sweep_w, 0, sweep_center + sweep_w, 0)
+        peak = int(130 * (fade ** 0.6))
+        grad.setColorAt(0.0, QColor(90, 220, 255, 0))
+        grad.setColorAt(0.5, QColor(120, 235, 255, peak))
+        grad.setColorAt(1.0, QColor(90, 220, 255, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRect(0, 0, w, h)
+
+        # Subtle horizon line pulse near bottom edge.
+        line_alpha = int(140 * (fade ** 1.1))
+        if line_alpha > 0:
+            line_grad = QLinearGradient(0, h - 2, w, h - 2)
+            line_grad.setColorAt(0.0, QColor(80, 190, 240, 0))
+            line_grad.setColorAt(0.5, QColor(130, 235, 255, line_alpha))
+            line_grad.setColorAt(1.0, QColor(80, 190, 240, 0))
+            p.setBrush(QBrush(line_grad))
+            p.drawRect(0, h - 2, w, 2)
 
     def _paint_bars(self, p: QPainter, w: int, h: int):
         p.setPen(Qt.PenStyle.NoPen)
@@ -430,11 +576,14 @@ class VisualizerWindow(QWidget):
         gap = 2
         bar_w = max(2, (w - gap * (num + 1)) / num)
         max_val = max(self.fft_data.max(), 0.001)
+        left_gain, right_gain = self._stereo_split_gains()
 
         theme = self._resolve_theme()
 
         for i in range(num):
-            val = self.fft_data[i]
+            pan = (i / (num - 1)) if num > 1 else 0.5
+            side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
+            val = self.fft_data[i] * side_gain
             norm = min(val / max_val, 1.0)
             bar_h = max(2, norm * (h - 6))
 
@@ -467,6 +616,7 @@ class VisualizerWindow(QWidget):
     def _paint_waveform(self, p: QPainter, w: int, h: int):
         num = len(self.fft_data)
         max_val = max(self.fft_data.max(), 0.001)
+        left_gain, right_gain = self._stereo_split_gains()
 
         theme = self._resolve_theme()
 
@@ -474,7 +624,9 @@ class VisualizerWindow(QWidget):
         path = QPainterPath()
         points = []
         for i in range(num):
-            norm = min(self.fft_data[i] / max_val, 1.0)
+            pan = (i / (num - 1)) if num > 1 else 0.5
+            side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
+            norm = min((self.fft_data[i] * side_gain) / max_val, 1.0)
             x = int(i * w / (num - 1)) if num > 1 else 0
             y = int(h - norm * (h - 8) - 4)
             points.append(QPointF(x, y))
@@ -531,11 +683,14 @@ class VisualizerWindow(QWidget):
         bar_w = max(2, (w - gap * (num + 1)) / num)
         max_val = max(self.fft_data.max(), 0.001)
         mid_y = h / 2
+        left_gain, right_gain = self._stereo_split_gains()
 
         theme = self._resolve_theme()
 
         for i in range(num):
-            val = self.fft_data[i]
+            pan = (i / (num - 1)) if num > 1 else 0.5
+            side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
+            val = self.fft_data[i] * side_gain
             norm = min(val / max_val, 1.0)
             half_h = max(1, norm * (mid_y - 3))
 
@@ -615,6 +770,76 @@ class VisualizerWindow(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(0, 0, 0, int(180 * alpha))))
         p.drawRoundedRect(box_x, box_y, box_w, box_h, 8, 8)
+
+        pad_x = 10
+        cover_gap = 8
+        cover_size = max(20, min(box_h - 10, int(box_h * 0.75)))
+        cover_x = box_x + pad_x
+        cover_y = box_y + int((box_h - cover_size) / 2)
+
+        cover_bytes = getattr(media, "cover_bytes", None)
+        has_cover = bool(cover_bytes)
+        if has_cover:
+            pix = QPixmap()
+            has_cover = pix.loadFromData(cover_bytes)
+
+        show_cover_slot = True
+
+        if has_cover:
+            cover_rect_f = QRectF(float(cover_x), float(cover_y), float(cover_size), float(cover_size))
+            clip_path = QPainterPath()
+            clip_path.addRoundedRect(cover_rect_f, 5.0, 5.0)
+            p.save()
+            p.setClipPath(clip_path)
+            scaled = pix.scaled(
+                cover_size,
+                cover_size,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            src_x = max(0, int((scaled.width() - cover_size) / 2))
+            src_y = max(0, int((scaled.height() - cover_size) / 2))
+            p.drawPixmap(
+                cover_x,
+                cover_y,
+                scaled,
+                src_x,
+                src_y,
+                cover_size,
+                cover_size,
+            )
+            p.restore()
+            p.setPen(QPen(QColor(255, 255, 255, int(70 * alpha)), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(cover_x, cover_y, cover_size, cover_size, 5, 5)
+        else:
+            # Keep a stable left slot even when art is unavailable.
+            ph_grad = QLinearGradient(
+                cover_x,
+                cover_y,
+                cover_x + cover_size,
+                cover_y + cover_size,
+            )
+            ph_grad.setColorAt(0.0, QColor(70, 70, 70, int(180 * alpha)))
+            ph_grad.setColorAt(1.0, QColor(35, 35, 35, int(180 * alpha)))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(ph_grad))
+            p.drawRoundedRect(cover_x, cover_y, cover_size, cover_size, 5, 5)
+            p.setPen(QPen(QColor(255, 255, 255, int(90 * alpha)), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(cover_x, cover_y, cover_size, cover_size, 5, 5)
+
+            icon_font = QFont("Segoe UI", max(8, int(cover_size * 0.42)), QFont.Weight.Bold)
+            p.setFont(icon_font)
+            p.setPen(QPen(QColor(220, 220, 220, int(170 * alpha))))
+            p.drawText(
+                cover_x,
+                cover_y,
+                cover_size,
+                cover_size,
+                Qt.AlignmentFlag.AlignCenter,
+                "♪",
+            )
         
         # Line 1: title
         title_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
@@ -630,13 +855,15 @@ class VisualizerWindow(QWidget):
             details_parts.append(media.album.strip())
         details = " • ".join([x for x in details_parts if x])
 
-        pad_x = 10
         top_y = box_y + 6
         title_h = max(12, int(box_h * 0.48))
         details_h = max(10, box_h - title_h - 8)
 
-        title_rect_x = box_x + pad_x
-        title_rect_w = box_w - (pad_x * 2)
+        left_offset = (cover_size + cover_gap) if show_cover_slot else 0
+        title_rect_x = box_x + pad_x + left_offset
+        title_rect_w = box_w - (pad_x * 2) - left_offset
+        if title_rect_w < 30:
+            return
         title_rect_y = top_y
 
         # Elide title to fit.

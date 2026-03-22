@@ -194,6 +194,8 @@ class TrayManager(QSystemTrayIcon):
         self.audio_thread.stop()
         if self.vis.volume_scroller:
             self.vis.volume_scroller.stop()
+        if self.vis.media_click_watcher:
+            self.vis.media_click_watcher.stop()
         if self.vis.media_monitor:
             self.vis.media_monitor.stop()
         self.vis.close()

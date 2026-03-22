@@ -29,13 +29,21 @@ except ImportError:
 
 class MediaInfo:
     """Snapshot of current media state."""
-    __slots__ = ("title", "artist", "album", "accent_rgb", "changed")
+    __slots__ = (
+        "title",
+        "artist",
+        "album",
+        "accent_rgb",
+        "cover_bytes",
+        "changed",
+    )
 
     def __init__(self):
         self.title: str = ""
         self.artist: str = ""
         self.album: str = ""
         self.accent_rgb: tuple = (80, 200, 240)   # default cyan
+        self.cover_bytes: bytes | None = None
         self.changed: bool = False
 
 
@@ -75,9 +83,14 @@ class MediaMonitor:
         manager = await SessionManager.request_async()
         session = manager.get_current_session()
         if session is None:
+            # Force next valid session to be treated as a fresh track snapshot,
+            # even if title/artist/album are unchanged after device switches.
+            self._prev_key = ""
             if self.info.title:
                 self.info.title = ""
                 self.info.artist = ""
+                self.info.album = ""
+                self.info.cover_bytes = None
                 self.info.changed = True
             return
 
@@ -99,17 +112,26 @@ class MediaMonitor:
                 thumb = props.thumbnail
                 if thumb:
                     stream = await thumb.open_read_async()
-                    size = stream.size
-                    buf = Buffer(min(size, 500_000))  # cap at 500 KB
+                    size = int(stream.size) if stream.size else 0
+                    if size <= 0:
+                        size = 262_144
+                    # Read the full thumbnail so image decode is valid for cover preview.
+                    buf = Buffer(size)
                     await stream.read_async(
                         buf, buf.capacity, InputStreamOptions.READ_AHEAD
                     )
                     reader = DataReader.from_buffer(buf)
-                    raw = bytes(reader.read_bytes(buf.length))
+                    data = bytearray(buf.length)
+                    reader.read_bytes(data)
+                    raw = bytes(data)
+                    self.info.cover_bytes = raw or None
                     rgb = self._dominant_color(raw)
                     if rgb:
                         self.info.accent_rgb = rgb
+                else:
+                    self.info.cover_bytes = None
             except Exception:
+                self.info.cover_bytes = None
                 pass   # thumbnail extraction is best-effort
 
     @staticmethod
