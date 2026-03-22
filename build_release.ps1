@@ -2,7 +2,9 @@ Param(
     [string]$Version = "1.0.0",
     [string]$CompanyName = "Audio Visualizer",
     [string]$ProductName = "Audio Visualizer",
-    [string]$FileDescription = "Windows taskbar audio visualizer"
+    [string]$FileDescription = "Windows taskbar audio visualizer",
+    [switch]$OneFile,
+    [switch]$SkipClean
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,10 +35,14 @@ Write-Host "[Build] Installing packaging dependencies"
 & $python -m pip install "pyinstaller==$pyinstallerVersion" "pyinstaller-hooks-contrib$pyinstallerHooksRange"
 & $python -m pip install -r requirements.txt
 
-Write-Host "[Build] Cleaning old artifacts"
-if (Test-Path ".\build") { Remove-Item ".\build" -Recurse -Force }
-if (Test-Path ".\dist") { Remove-Item ".\dist" -Recurse -Force }
-if (Test-Path ".\AudioVisualizer.spec") { Remove-Item ".\AudioVisualizer.spec" -Force }
+if ($SkipClean) {
+    Write-Host "[Build] Skipping cleanup of previous artifacts"
+} else {
+    Write-Host "[Build] Cleaning old artifacts"
+    if (Test-Path ".\build") { Remove-Item ".\build" -Recurse -Force }
+    if (Test-Path ".\dist") { Remove-Item ".\dist" -Recurse -Force }
+    if (Test-Path ".\AudioVisualizer.spec") { Remove-Item ".\AudioVisualizer.spec" -Force }
+}
 
 Write-Host "[Build] Generating app icon"
 & $python ".\tools\generate_icon.py"
@@ -75,28 +81,47 @@ VSVersionInfo(
 "@ | Set-Content -Path $versionFile -Encoding UTF8
 
 Write-Host "[Build] Building Windows app bundle"
-& $python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --windowed `
-    --name AudioVisualizer `
-        --icon $iconPath `
-        --version-file $versionFile `
-    --collect-all winsdk `
-    --hidden-import comtypes.stream `
-    --hidden-import pycaw.pycaw `
-    main.py
+$pyInstallerArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--windowed",
+    "--name", "AudioVisualizer",
+    "--icon", $iconPath,
+    "--version-file", $versionFile,
+    "--collect-all", "winsdk",
+    "--hidden-import", "comtypes.stream",
+    "--hidden-import", "pycaw.pycaw"
+)
 
-Write-Host "[Build] Creating release metadata"
-$releaseDir = ".\dist\AudioVisualizer"
-if (!(Test-Path $releaseDir)) {
-    throw "Build output not found at $releaseDir"
+if ($OneFile) {
+    $pyInstallerArgs += "--onefile"
 }
 
-@"
+$pyInstallerArgs += "main.py"
+
+& $python @pyInstallerArgs
+
+Write-Host "[Build] Creating release metadata"
+if ($OneFile) {
+    $releasePath = ".\dist\AudioVisualizer.exe"
+    if (!(Test-Path $releasePath)) {
+        throw "Build output not found at $releasePath"
+    }
+
+    Write-Host "[Build] Complete. Output: $releasePath"
+    Write-Host "[Build] This is a standalone executable for direct distribution."
+} else {
+    $releaseDir = ".\dist\AudioVisualizer"
+    if (!(Test-Path $releaseDir)) {
+        throw "Build output not found at $releaseDir"
+    }
+
+    @"
 Audio Visualizer v$Version
 Build date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 "@ | Set-Content -Path "$releaseDir\VERSION.txt" -Encoding UTF8
 
-Write-Host "[Build] Complete. Output: $releaseDir"
-Write-Host "[Build] Next: compile installer with installer\AudioVisualizer.iss"
+    Write-Host "[Build] Complete. Output: $releaseDir"
+    Write-Host "[Build] Next: compile installer with installer\AudioVisualizer.iss"
+}

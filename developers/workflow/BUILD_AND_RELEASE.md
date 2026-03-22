@@ -52,6 +52,14 @@ Verified local run (2026-03-22):
 - `dist/AudioVisualizer` created successfully
 - `dist/AudioVisualizer-Setup-1.0.1.exe` created successfully
 
+## GitHub Tag Release Outputs
+
+The `Release on Tag` workflow publishes all of the following assets:
+
+- `dist/AudioVisualizer-Setup-<version>.exe`
+- `dist/AudioVisualizer-Portable-<version>.zip`
+- `dist/AudioVisualizer-Portable-<version>.exe` (standalone one-file build)
+
 ## Create Tag
 
 ```powershell
@@ -63,7 +71,8 @@ Verified local run (2026-03-22):
 1. Launch built app from `dist/AudioVisualizer/AudioVisualizer.exe`.
 2. Confirm tray icon appears.
 3. Play audio and confirm visualizer movement.
-4. Run installer and validate launch from Start Menu.
+4. Run standalone portable exe `dist/AudioVisualizer-Portable-<version>.exe` on a clean machine.
+5. Run installer and validate launch from Start Menu.
 
 ## Cross-Machine Release Checklist
 

@@ -54,6 +54,20 @@ jobs:
           }
           Compress-Archive -Path ".\dist\AudioVisualizer\*" -DestinationPath $zipPath -Force
 
+      - name: Build standalone portable exe
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          .\build_release.ps1 -Version $version -CompanyName "Audio Visualizer" -ProductName "Audio Visualizer" -OneFile -SkipClean
+
+          $standalonePath = ".\dist\AudioVisualizer.exe"
+          if (!(Test-Path $standalonePath)) {
+            throw "Standalone executable not found at $standalonePath"
+          }
+
+          $versionedStandalonePath = ".\dist\AudioVisualizer-Portable-$version.exe"
+          Copy-Item $standalonePath $versionedStandalonePath -Force
+
       - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
         with:
@@ -62,3 +76,4 @@ jobs:
           files: |
             dist/AudioVisualizer-Setup-*.exe
             dist/AudioVisualizer-Portable-*.zip
+            dist/AudioVisualizer-Portable-*.exe
