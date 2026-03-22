@@ -12,5 +12,5 @@ This section is for contributors and maintainers.
 ## Related Root Docs
 
 - Main documentation: ../README.md
-- Quickstart: ../QUICKSTART.md
-- Installation and packaging: ../INSTALLATION.md
+- Quickstart: setup/QUICKSTART.md
+- Installation and packaging: ../users/install/INSTALLATION.md

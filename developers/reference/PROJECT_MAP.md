@@ -24,3 +24,5 @@
 
 - users/
 - developers/
+- users/install/INSTALLATION.md
+- developers/setup/QUICKSTART.md

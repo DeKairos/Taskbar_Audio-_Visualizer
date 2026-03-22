@@ -5,6 +5,7 @@ This section is for end users.
 ## Start Here
 
 - Install app: install/INSTALLER.md
+- Full install and packaging notes: install/INSTALLATION.md
 - First run: use/FIRST_RUN.md
 - Troubleshooting: help/TROUBLESHOOTING.md
 
