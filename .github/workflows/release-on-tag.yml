@@ -10,10 +10,55 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
-      - name: Create GitHub release
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create expected virtual environment
+        shell: pwsh
+        run: |
+          python -m venv .\venv_win
+
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          $isccCandidates = @(
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+          )
+
+          $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build installer artifacts
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          .\package_release.ps1 -Version $version -Publisher "Audio Visualizer" -AppUrl "https://github.com/${{ github.repository }}"
+
+      - name: Package portable build zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $zipPath = ".\dist\AudioVisualizer-Portable-$version.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+          Compress-Archive -Path ".\dist\AudioVisualizer\*" -DestinationPath $zipPath -Force
+
+      - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/AudioVisualizer-Setup-*.exe
+            dist/AudioVisualizer-Portable-*.zip
