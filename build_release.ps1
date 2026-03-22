@@ -19,6 +19,8 @@ if (!(Test-Path ".\venv_win\Scripts\python.exe")) {
 $python = ".\venv_win\Scripts\python.exe"
 $iconPath = ".\assets\app_icon.ico"
 $versionFile = ".\build\version_info.txt"
+$pyinstallerVersion = "6.16.0"
+$pyinstallerHooksRange = "<2026"
 
 $versionParts = $Version.Split(".")
 while ($versionParts.Count -lt 4) {
@@ -28,7 +30,7 @@ $fileVersion = ($versionParts[0..3] -join ".")
 
 Write-Host "[Build] Installing packaging dependencies"
 & $python -m pip install --upgrade pip
-& $python -m pip install pyinstaller
+& $python -m pip install "pyinstaller==$pyinstallerVersion" "pyinstaller-hooks-contrib$pyinstallerHooksRange"
 & $python -m pip install -r requirements.txt
 
 Write-Host "[Build] Cleaning old artifacts"
