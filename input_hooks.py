@@ -36,13 +36,12 @@ HOOKPROC = ctypes.WINFUNCTYPE(
 class VisualizerClickWatcher:
     """Captures left-clicks over the visualizer rect and triggers a callback."""
 
-    def __init__(self, visualizer_window, on_click):
-        self.vis = visualizer_window
+    def __init__(self, visualizer_hwnd: int, on_click):
+        self._vis_hwnd = int(visualizer_hwnd) if visualizer_hwnd else None
         self.on_click = on_click
         self._hook = None
         self._running = False
         self._thread = None
-        self._vis_hwnd = None
         self._last_click_ts = 0.0
 
     def start(self):
@@ -59,11 +58,6 @@ class VisualizerClickWatcher:
     def _hook_thread(self):
         """Run low-level mouse hook in its own message loop thread."""
         user32 = ctypes.windll.user32
-
-        try:
-            self._vis_hwnd = int(self.vis.winId())
-        except Exception:
-            self._vis_hwnd = None
 
         rect = ctypes.wintypes.RECT()
 

@@ -8,7 +8,6 @@ from visualizer_window import VisualizerWindow
 from tray_manager import TrayManager
 from config_manager import load_config
 from media_monitor import MediaMonitor
-from input_hooks import VisualizerClickWatcher
 
 
 def main():
@@ -32,12 +31,7 @@ def main():
     visualizer.media_monitor = media_monitor
 
     # Clicking on visualizer area reveals now-playing overlay on demand.
-    click_watcher = VisualizerClickWatcher(
-        visualizer,
-        visualizer.request_media_overlay,
-    )
-    click_watcher.start()
-    visualizer.media_click_watcher = click_watcher
+    # Handled by a safe UI-thread polling timer in VisualizerWindow.
 
     tray = TrayManager(visualizer, audio_thread, config)
     tray.show()

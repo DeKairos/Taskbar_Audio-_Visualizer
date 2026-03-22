@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, QPointF, QEvent, QRectF, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QBrush, QPen, QPainterPath,
     QRadialGradient, QLinearGradient, QFont, QPixmap,
+    QCursor,
 )
 from color_themes import get_theme, bar_color
 
@@ -30,6 +31,7 @@ SWP_SHOWWINDOW = 0x0040
 SWP_NOOWNERZORDER = 0x0200
 SW_SHOWNOACTIVATE = 4
 SW_RESTORE = 9
+VK_LBUTTON = 0x01
 user32 = ctypes.windll.user32
 
 
@@ -84,6 +86,7 @@ class VisualizerWindow(QWidget):
         self.volume_scroller = None
         self.media_monitor = None
         self.media_click_watcher = None
+        self._left_pressed_last = False
 
         # Thread-safe trigger from global mouse hook.
         self.media_overlay_requested.connect(self._show_media_overlay_on_demand)
@@ -104,6 +107,26 @@ class VisualizerWindow(QWidget):
         self._clickthrough_refresh_timer = QTimer()
         self._clickthrough_refresh_timer.timeout.connect(self._refresh_window_styles)
         self._clickthrough_refresh_timer.start(500)
+
+        # Safe click polling in UI thread (avoids global low-level mouse hooks).
+        self._click_poll_timer = QTimer()
+        self._click_poll_timer.timeout.connect(self._poll_media_overlay_click)
+        self._click_poll_timer.start(40)
+
+    def _poll_media_overlay_click(self):
+        """Trigger media card when left-click starts over this visualizer."""
+        try:
+            left_pressed = bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+        except Exception:
+            left_pressed = False
+
+        # Rising edge only: one trigger per click press.
+        if left_pressed and not self._left_pressed_last:
+            pos = QCursor.pos()
+            if self.geometry().contains(pos):
+                self._show_media_overlay_on_demand()
+
+        self._left_pressed_last = left_pressed
 
     # ====================== POSITIONING ==============================
 
@@ -352,7 +375,7 @@ class VisualizerWindow(QWidget):
         self.update()
 
     def _update_media_overlay_state(self):
-        """Auto-show now-playing once initially; later show only on click trigger."""
+        """Auto-show now-playing on track changes; allow click-to-show on demand."""
         if not self.media_monitor:
             self._media_overlay_alpha = 0.0
             return
@@ -365,10 +388,10 @@ class VisualizerWindow(QWidget):
 
         now = time.time()
         if media.changed:
-            if not self._media_initial_auto_shown:
-                self._media_overlay_started_at = now
-                self._track_morph_started_at = now
-                self._media_initial_auto_shown = True
+            # Track metadata changed: show card + run morph once per change.
+            self._media_overlay_started_at = now
+            self._track_morph_started_at = now
+            self._media_initial_auto_shown = True
             media.changed = False
 
         if self._media_overlay_started_at <= 0:
@@ -399,7 +422,6 @@ class VisualizerWindow(QWidget):
             return
         now = time.time()
         self._media_overlay_started_at = now
-        self._track_morph_started_at = now
 
     def _resolve_theme(self) -> dict:
         """Return the active color theme, applying album-art color only in dynamic mode."""
