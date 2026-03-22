@@ -18,12 +18,20 @@ if (!(Test-Path $issFile)) {
 }
 
 $installerCompilerCandidates = @(
+    "$env:ChocolateyInstall\bin\iscc.exe",
+    "$env:ProgramData\chocolatey\bin\iscc.exe",
     "$env:LocalAppData\Programs\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
 )
 
 $iscc = $installerCompilerCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) {
+    $isccFromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+    if ($isccFromPath) {
+        $iscc = $isccFromPath.Source
+    }
+}
 if (-not $iscc) {
     throw "Inno Setup compiler (ISCC.exe) not found. Install Inno Setup 6 and re-run package_release.ps1."
 }

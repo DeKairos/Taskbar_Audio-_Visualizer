@@ -29,14 +29,37 @@ jobs:
         shell: pwsh
         run: |
           $isccCandidates = @(
+            "$env:ChocolateyInstall\bin\iscc.exe",
+            "$env:ProgramData\chocolatey\bin\iscc.exe",
             "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
             "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
           )
 
           $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) {
-            choco install innosetup --no-progress -y
+            $isccFromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+            if ($isccFromPath) {
+              $iscc = $isccFromPath.Source
+            }
           }
+
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+
+            $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $iscc) {
+              $isccFromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
+              if ($isccFromPath) {
+                $iscc = $isccFromPath.Source
+              }
+            }
+          }
+
+          if (-not $iscc) {
+            throw "Inno Setup compiler (ISCC.exe) was not found after installation attempt."
+          }
+
+          Write-Host "Using ISCC: $iscc"
 
       - name: Build installer artifacts
         shell: pwsh
