@@ -2,6 +2,7 @@
 tray_manager.py — System tray icon with controls for the visualizer.
 """
 import sys
+import os
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction
 from config_manager import save_config, set_startup
@@ -10,9 +11,12 @@ from color_themes import THEME_NAMES, THEME_DISPLAY
 
 class TrayManager(QSystemTrayIcon):
     def __init__(self, visualizer_window, audio_thread, config: dict):
-        pixmap = QPixmap(32, 32)
-        pixmap.fill(QColor(0, 180, 220))
-        icon = QIcon(pixmap)
+        icon_path = os.path.join(os.path.dirname(__file__), "assets", "app_icon.ico")
+        icon = QIcon(icon_path)
+        if icon.isNull():
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(QColor(0, 180, 220))
+            icon = QIcon(pixmap)
 
         super().__init__(icon)
         self.vis = visualizer_window
@@ -61,14 +65,6 @@ class TrayManager(QSystemTrayIcon):
             action = QAction(f"{prefix} {display_name}", theme_menu)
             action.triggered.connect(lambda checked, t=theme_id: self._set_theme(t))
             theme_menu.addAction(action)
-
-        # ─── Width ───
-        width_menu = menu.addMenu("Width")
-        for label, pct in [("25%", 25), ("40%", 40), ("60%", 60), ("100%", 100)]:
-            prefix = "◉" if self.cfg.get("width_percent", 40) == pct else "○"
-            action = QAction(f"{prefix} {label}", width_menu)
-            action.triggered.connect(lambda checked, p=pct: self._set_width(p))
-            width_menu.addAction(action)
 
         menu.addSeparator()
 
@@ -145,12 +141,6 @@ class TrayManager(QSystemTrayIcon):
         self.cfg["theme"] = theme
         self.vis.apply_config(self.cfg)
         self._build_menu()  # rebuild to update radio indicators
-        self._save()
-
-    def _set_width(self, pct: int):
-        self.cfg["width_percent"] = pct
-        self.vis.apply_config(self.cfg)
-        self._build_menu()
         self._save()
 
     def _toggle_glow(self):
