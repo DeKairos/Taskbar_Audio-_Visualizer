@@ -18,17 +18,23 @@ If you prefer command line, this downloads the latest installer from GitHub Rele
 
 ```powershell
 $repo = "DeKairos/Taskbar_Audio-_Visualizer"
-$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
+$token = ""  # Optional: GitHub Personal Access Token (needed for private repos)
+$headers = @{}
+if ($token) { $headers["Authorization"] = "Bearer $token" }
+
+$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers $headers
 $asset = $release.assets | Where-Object { $_.name -like "AudioVisualizer-Setup-*.exe" } | Select-Object -First 1
 
 if (-not $asset) { throw "Installer EXE not found in latest release assets." }
 
 $outFile = Join-Path $env:TEMP $asset.name
-Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile
+Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $outFile
 Start-Process -FilePath $outFile
 ```
 
 After the installer opens, follow the setup wizard.
+
+If the repository is private, set `$token` to a GitHub token with access to that repository before running the command.
 
 ## Install Steps
 
@@ -41,6 +47,22 @@ After the installer opens, follow the setup wizard.
 
 - A tray icon appears near the Windows clock.
 - When system audio plays, the taskbar visualizer animates.
+
+## For Sharing With Other People
+
+If you are preparing a release for other users, distribute only:
+
+- `AudioVisualizer-Setup-<version>.exe`
+
+Do not ask end users to install Python or run source scripts. The installer contains the packaged app runtime.
+
+Before sharing publicly, validate on a second Windows PC (or clean VM):
+
+1. Install using the setup file.
+2. Launch from Start Menu.
+3. Confirm tray icon appears.
+4. Play audio and verify visualization responds.
+5. Uninstall once to confirm cleanup works.
 
 ## If SmartScreen Appears
 

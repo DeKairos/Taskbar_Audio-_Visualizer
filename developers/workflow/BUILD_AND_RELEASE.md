@@ -8,6 +8,18 @@ This document is the source of truth for packaging and release commands.
 - Dependencies installed from `requirements.txt`
 - Inno Setup installed for installer creation
 
+Notes:
+
+- `package_release.ps1` now detects Inno Setup in both locations:
+  - `%LocalAppData%\Programs\Inno Setup 6\ISCC.exe`
+  - `%ProgramFiles%\Inno Setup 6\ISCC.exe`
+  - `%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe`
+- If `venv_win` does not exist yet, create it first:
+
+```powershell
+py -3.10 -m venv .\venv_win
+```
+
 Install Inno Setup if needed:
 
 ```powershell
@@ -35,6 +47,11 @@ Expected outputs:
 - `dist/AudioVisualizer`
 - `dist/AudioVisualizer-Setup-1.0.1.exe`
 
+Verified local run (2026-03-22):
+
+- `dist/AudioVisualizer` created successfully
+- `dist/AudioVisualizer-Setup-1.0.1.exe` created successfully
+
 ## Create Tag
 
 ```powershell
@@ -47,6 +64,16 @@ Expected outputs:
 2. Confirm tray icon appears.
 3. Play audio and confirm visualizer movement.
 4. Run installer and validate launch from Start Menu.
+
+## Cross-Machine Release Checklist
+
+Use this before uploading a release for other users:
+
+1. Test install on a second Windows machine (or clean VM) that does not have your dev tools.
+2. Install with `AudioVisualizer-Setup-<version>.exe` and launch from Start Menu.
+3. Confirm no Python dependency is required on the target machine.
+4. Confirm tray icon appears and taskbar visualization reacts to system audio.
+5. Uninstall and verify app files are removed from Program Files and startup entry is cleaned up.
 
 ## If Packaging Fails
 

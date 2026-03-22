@@ -18,6 +18,7 @@ if (!(Test-Path $issFile)) {
 }
 
 $installerCompilerCandidates = @(
+    "$env:LocalAppData\Programs\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
 )
