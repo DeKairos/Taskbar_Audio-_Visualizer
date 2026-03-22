@@ -35,7 +35,6 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\assets\app_icon.ico
 CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
-CloseApplicationsForce=yes
 RestartApplications=no
 
 [Languages]
