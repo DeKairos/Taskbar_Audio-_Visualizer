@@ -18,7 +18,21 @@ Notes:
 - No Python or VS Code is required for end users.
 - The visualizer runs as a normal desktop app.
 
-## Option 2: Portable App Folder (no installer)
+## Option 2: Portable Standalone EXE (no installer)
+
+Use this when you want a single file and do not want to run setup.
+
+1. Download `AudioVisualizer-Portable-x.y.z.exe`.
+2. Place it in a folder you control (for example, `Downloads` or `Desktop`).
+3. Double-click the file to run.
+
+Notes:
+
+- This does not require Python.
+- This option does not create Start Menu entries or uninstall records.
+- Keep the file in a stable location if you plan to pin it to Start or Taskbar.
+
+## Option 3: Portable App Folder (no installer)
 
 If you received a prebuilt app folder named `AudioVisualizer`, users can run:
 
@@ -35,6 +49,7 @@ Notes:
 If you are an end user, you should receive one of these from whoever shared the app:
 
 - `AudioVisualizer-Setup-x.y.z.exe` (recommended)
+- `AudioVisualizer-Portable-x.y.z.exe` (single-file portable)
 - `AudioVisualizer` folder (portable build)
 
 If you are a developer and need to build these artifacts yourself, use [../../developers/workflow/BUILD_AND_RELEASE.md](../../developers/workflow/BUILD_AND_RELEASE.md).

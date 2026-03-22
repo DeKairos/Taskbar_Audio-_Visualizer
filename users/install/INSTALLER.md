@@ -10,7 +10,13 @@ Use this guide if you are installing Audio Visualizer on a normal Windows PC.
 If you do not have the setup file yet, download the latest installer directly from:
 [https://github.com/DeKairos/Taskbar_Audio-\_Visualizer/releases/latest](https://github.com/DeKairos/Taskbar_Audio-_Visualizer/releases/latest)
 
-On the release page, open **Assets** and download `AudioVisualizer-Setup-<version>.exe`.
+On the release page, open **Assets**. You will usually see:
+
+- `AudioVisualizer-Setup-<version>.exe` (installer, recommended)
+- `AudioVisualizer-Portable-<version>.exe` (single-file portable)
+- `AudioVisualizer-Portable-<version>.zip` (portable folder package)
+
+For this guide, download `AudioVisualizer-Setup-<version>.exe`.
 
 ## Optional CLI Install (PowerShell)
 
@@ -43,6 +49,16 @@ If the repository is private, set `$token` to a GitHub token with access to that
 3. Finish installation.
 4. Launch Audio Visualizer from the Start Menu.
 
+## If You Prefer No Installer
+
+If you do not want to install anything, download `AudioVisualizer-Portable-<version>.exe` from the same release page and run it directly.
+
+Notes:
+
+- No setup wizard is required.
+- No Start Menu entry is created.
+- Keep the EXE in a stable location if you plan to make shortcuts.
+
 ## What You Should See
 
 - A tray icon appears near the Windows clock.
@@ -50,9 +66,11 @@ If the repository is private, set `$token` to a GitHub token with access to that
 
 ## For Sharing With Other People
 
-If you are preparing a release for other users, distribute only:
+If you are preparing a release for other users, distribute one of these:
 
-- `AudioVisualizer-Setup-<version>.exe`
+- `AudioVisualizer-Setup-<version>.exe` (best default for most users)
+- `AudioVisualizer-Portable-<version>.exe` (single-file portable)
+- `AudioVisualizer-Portable-<version>.zip` (portable folder package)
 
 Do not ask end users to install Python or run source scripts. The installer contains the packaged app runtime.
 
