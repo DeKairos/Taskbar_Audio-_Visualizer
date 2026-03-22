@@ -10,12 +10,12 @@ from PyQt6.QtCore import QTimer
 from config_manager import save_config, set_startup
 from color_themes import THEME_NAMES, THEME_DISPLAY
 from update_checker import check_for_updates
+from app_resources import get_app_icon
 
 
 class TrayManager(QSystemTrayIcon):
     def __init__(self, visualizer_window, audio_thread, config: dict):
-        icon_path = os.path.join(os.path.dirname(__file__), "assets", "app_icon.ico")
-        icon = QIcon(icon_path)
+        icon = get_app_icon()
         if icon.isNull():
             pixmap = QPixmap(32, 32)
             pixmap.fill(QColor(0, 180, 220))
