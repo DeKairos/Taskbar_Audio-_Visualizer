@@ -62,6 +62,7 @@ class AudioCaptureThread(QThread):
         block_size = 4096
         samplerate = 44100
         num_bars = 64
+        window = np.hanning(block_size)
 
         # Perceptual frequency mapping: log-spaced buckets spread activity more
         # evenly across the visualizer width than linear FFT bin slicing.
@@ -104,8 +105,7 @@ class AudioCaptureThread(QThread):
                                 else:
                                     mono = data
 
-                                # Apply a Hann window for clean FFT
-                                window = np.hanning(len(mono))
+                                # Apply a precomputed Hann window for clean FFT.
                                 mono = mono * window
 
                                 # Compute real FFT

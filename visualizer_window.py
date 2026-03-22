@@ -70,6 +70,9 @@ class VisualizerWindow(QWidget):
         self._media_overlay_fade = 1.2
         self._media_overlay_alpha = 0.0
         self._media_initial_auto_shown = False
+        self._media_cover_pixmap = None
+        self._media_cover_scaled_pixmap = None
+        self._media_cover_scaled_size = 0
 
         # Track-change morph: bars briefly collapse to center and re-expand.
         self._track_morph_started_at = 0.0
@@ -337,10 +340,6 @@ class VisualizerWindow(QWidget):
     # ====================== TICK / AUTO-HIDE =========================
 
     def _tick(self):
-        # Keep shell/taskbar z-order steals from making the overlay disappear.
-        # Refresh every frame for fastest recovery from Start/taskbar transitions.
-        self._refresh_window_styles()
-
         if not self.cfg.get("enabled", True):
             if self._opacity > 0:
                 self._opacity = max(0, self._opacity - 0.1)
@@ -383,6 +382,9 @@ class VisualizerWindow(QWidget):
         media = self.media_monitor.info
         if not media.title:
             self._media_overlay_alpha = 0.0
+            self._media_cover_pixmap = None
+            self._media_cover_scaled_pixmap = None
+            self._media_cover_scaled_size = 0
             media.changed = False
             return
 
@@ -392,6 +394,9 @@ class VisualizerWindow(QWidget):
             self._media_overlay_started_at = now
             self._track_morph_started_at = now
             self._media_initial_auto_shown = True
+            self._media_cover_pixmap = None
+            self._media_cover_scaled_pixmap = None
+            self._media_cover_scaled_size = 0
             media.changed = False
 
         if self._media_overlay_started_at <= 0:
@@ -800,10 +805,17 @@ class VisualizerWindow(QWidget):
         cover_y = box_y + int((box_h - cover_size) / 2)
 
         cover_bytes = getattr(media, "cover_bytes", None)
-        has_cover = bool(cover_bytes)
-        if has_cover:
+        if not cover_bytes:
+            self._media_cover_pixmap = None
+            self._media_cover_scaled_pixmap = None
+            self._media_cover_scaled_size = 0
+
+        if cover_bytes and self._media_cover_pixmap is None:
             pix = QPixmap()
-            has_cover = pix.loadFromData(cover_bytes)
+            if pix.loadFromData(cover_bytes):
+                self._media_cover_pixmap = pix
+
+        has_cover = bool(self._media_cover_pixmap and not self._media_cover_pixmap.isNull())
 
         show_cover_slot = True
 
@@ -813,12 +825,19 @@ class VisualizerWindow(QWidget):
             clip_path.addRoundedRect(cover_rect_f, 5.0, 5.0)
             p.save()
             p.setClipPath(clip_path)
-            scaled = pix.scaled(
-                cover_size,
-                cover_size,
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            if (
+                self._media_cover_scaled_pixmap is None
+                or self._media_cover_scaled_size != cover_size
+            ):
+                self._media_cover_scaled_pixmap = self._media_cover_pixmap.scaled(
+                    cover_size,
+                    cover_size,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._media_cover_scaled_size = cover_size
+
+            scaled = self._media_cover_scaled_pixmap
             src_x = max(0, int((scaled.width() - cover_size) / 2))
             src_y = max(0, int((scaled.height() - cover_size) / 2))
             p.drawPixmap(

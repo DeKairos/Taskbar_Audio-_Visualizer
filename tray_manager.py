@@ -3,10 +3,11 @@ tray_manager.py — System tray icon with controls for the visualizer.
 """
 import sys
 import os
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction
 from config_manager import save_config, set_startup
 from color_themes import THEME_NAMES, THEME_DISPLAY
+from update_checker import check_for_updates
 
 
 class TrayManager(QSystemTrayIcon):
@@ -99,6 +100,13 @@ class TrayManager(QSystemTrayIcon):
 
         menu.addSeparator()
 
+        # ─── Updates ───
+        self.check_updates_action = QAction("Check for updates", menu)
+        self.check_updates_action.triggered.connect(self._check_for_updates)
+        menu.addAction(self.check_updates_action)
+
+        menu.addSeparator()
+
         # ─── Quit ───
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self._quit)
@@ -178,6 +186,47 @@ class TrayManager(QSystemTrayIcon):
 
     def _save(self):
         save_config(self.cfg)
+
+    def _check_for_updates(self):
+        result = check_for_updates()
+        if not result.get("ok", False):
+            QMessageBox.warning(
+                self.vis,
+                "Update Check",
+                "Could not check for updates.\n\n"
+                f"Reason: {result.get('error', 'Unknown error')}",
+            )
+            return
+
+        current_version = result.get("current_version", "unknown")
+        latest_version = result.get("latest_version", "unknown")
+
+        if result.get("update_available", False):
+            release_name = result.get("release_name", "Latest release")
+            release_url = result.get("release_url", "")
+            msg = QMessageBox(self.vis)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Update Available")
+            msg.setText(
+                f"A new version is available.\n\n"
+                f"Current: {current_version}\n"
+                f"Latest: {latest_version}\n"
+                f"Release: {release_name}"
+            )
+            open_btn = msg.addButton("Open Download Page", QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton(QMessageBox.StandardButton.Close)
+            msg.exec()
+            if msg.clickedButton() == open_btn and release_url:
+                import webbrowser
+
+                webbrowser.open(release_url)
+            return
+
+        QMessageBox.information(
+            self.vis,
+            "Update Check",
+            f"You are up to date.\n\nCurrent version: {current_version}",
+        )
 
     def _quit(self):
         self.vis.timer.stop()
