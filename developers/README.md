@@ -13,7 +13,7 @@ This section is for contributors and maintainers working on source code, packagi
 
 - Main documentation: ../README.md
 - Quickstart: setup/QUICKSTART.md
-- Installation and packaging: ../users/install/INSTALLATION.md
+- End-user install guide: ../users/install/INSTALLATION.md
 
 ## Recommended Reading Order
 

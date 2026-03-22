@@ -1,12 +1,12 @@
 # Audio Visualizer Installation Guide
 
-This guide explains all supported ways to install or run Audio Visualizer.
+This guide explains all user-supported ways to install or run Audio Visualizer.
 
-Use this file when you need full details. For a short installer-only path, use [INSTALLER.md](INSTALLER.md).
+If you only need the quickest setup path, use [INSTALLER.md](INSTALLER.md).
 
 ## Option 1: Installer (recommended for most users)
 
-Use this option when you are sharing the app with someone else.
+Use this option for the easiest, no-hassle install.
 
 1. Download the installer file: `AudioVisualizer-Setup-x.y.z.exe`.
 2. Double-click the installer and follow the setup wizard.
@@ -20,7 +20,7 @@ Notes:
 
 ## Option 2: Portable App Folder (no installer)
 
-If you share only the app folder (`dist/AudioVisualizer`), users can run:
+If you received a prebuilt app folder named `AudioVisualizer`, users can run:
 
 1. Open the shared folder.
 2. Double-click `AudioVisualizer.exe`.
@@ -30,86 +30,14 @@ Notes:
 - This also does not require Python.
 - Keep all files in the folder together.
 
-## Option 3: Run From Source (developer mode)
+## Where The Installer File Comes From
 
-Use this only for development.
+If you are an end user, you should receive one of these from whoever shared the app:
 
-Prerequisites:
+- `AudioVisualizer-Setup-x.y.z.exe` (recommended)
+- `AudioVisualizer` folder (portable build)
 
-- Windows 10 or newer
-- Python 3.10+
-
-Steps:
-
-1. Open PowerShell in the project root folder.
-2. Create or use the existing virtual environment in `venv_win`.
-3. Install dependencies:
-
-```powershell
-pip install -r requirements.txt
-```
-
-4. Start app:
-
-```powershell
-python main.py
-```
-
-## Build Installer Yourself
-
-From the project root, run:
-
-```powershell
-.\package_release.ps1 -Version 1.0.1
-```
-
-Expected outputs:
-
-- App folder: `dist\AudioVisualizer`
-- Installer: `dist\AudioVisualizer-Setup-1.0.1.exe`
-
-If setup compilation fails, install Inno Setup 6 and confirm `ISCC.exe` is available.
-
-Quick install command:
-
-```powershell
-winget install --id JRSoftware.InnoSetup -e --accept-package-agreements --accept-source-agreements --silent
-```
-
-## Troubleshooting Packaging Failures
-
-### Case: PyInstaller fails before `dist\\AudioVisualizer` is created
-
-Symptom in logs:
-
-- `FileNotFoundError` for `build\\AudioVisualizer\\AudioVisualizer.exe`
-- Followed by `Build output not found at .\\dist\\AudioVisualizer`
-
-What to do:
-
-1. Delete old artifacts and rebuild:
-
-```powershell
-Remove-Item .\build -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item .\dist -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item .\AudioVisualizer.spec -Force -ErrorAction SilentlyContinue
-.\package_release.ps1 -Version 1.0.1
-```
-
-2. If it still fails, pin PyInstaller to a stable version in your venv and retry:
-
-```powershell
-.\venv_win\Scripts\python.exe -m pip install "pyinstaller==6.16.0" "pyinstaller-hooks-contrib<2026"
-.\package_release.ps1 -Version 1.0.1
-```
-
-3. Confirm output exists after success:
-
-```powershell
-Get-ChildItem .\dist
-```
-
-If `dist\\AudioVisualizer-Setup-<version>.exe` is present, the installer is ready to share.
+If you are a developer and need to build these artifacts yourself, use [../../developers/workflow/BUILD_AND_RELEASE.md](../../developers/workflow/BUILD_AND_RELEASE.md).
 
 ## Where To Go Next
 

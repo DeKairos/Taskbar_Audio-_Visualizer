@@ -50,5 +50,19 @@ Expected outputs:
 
 ## If Packaging Fails
 
-- Read full troubleshooting in `../../users/install/INSTALLATION.md`.
 - Rebuild from clean state as documented in `CLEANUP.md`.
+- If PyInstaller fails before `dist/AudioVisualizer` is created, run:
+
+```powershell
+Remove-Item .\build -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item .\dist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item .\AudioVisualizer.spec -Force -ErrorAction SilentlyContinue
+.\package_release.ps1 -Version 1.0.1
+```
+
+- If it still fails, pin PyInstaller and retry:
+
+```powershell
+.\venv_win\Scripts\python.exe -m pip install "pyinstaller==6.16.0" "pyinstaller-hooks-contrib<2026"
+.\package_release.ps1 -Version 1.0.1
+```
