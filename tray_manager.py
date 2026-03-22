@@ -3,8 +3,10 @@ tray_manager.py — System tray icon with controls for the visualizer.
 """
 import sys
 import os
+import time
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction
+from PyQt6.QtCore import QTimer
 from config_manager import save_config, set_startup
 from color_themes import THEME_NAMES, THEME_DISPLAY
 from update_checker import check_for_updates
@@ -26,6 +28,7 @@ class TrayManager(QSystemTrayIcon):
 
         self.setToolTip("Audio Visualizer")
         self._build_menu()
+        self._schedule_auto_update_check()
 
     def _build_menu(self):
         menu = QMenu()
@@ -187,9 +190,30 @@ class TrayManager(QSystemTrayIcon):
     def _save(self):
         save_config(self.cfg)
 
-    def _check_for_updates(self):
+    def _schedule_auto_update_check(self):
+        if not self.cfg.get("auto_update_check", True):
+            return
+
+        interval_hours = float(self.cfg.get("update_check_interval_hours", 24) or 24)
+        interval_seconds = max(1.0, interval_hours * 3600.0)
+        last_check = float(self.cfg.get("last_update_check_ts", 0.0) or 0.0)
+        if time.time() - last_check < interval_seconds:
+            return
+
+        # Delay startup check so app launch remains responsive.
+        QTimer.singleShot(5000, self._run_silent_startup_update_check)
+
+    def _run_silent_startup_update_check(self):
+        self._check_for_updates(silent_error=True, silent_no_update=True)
+
+    def _check_for_updates(self, silent_error: bool = False, silent_no_update: bool = False):
+        self.cfg["last_update_check_ts"] = time.time()
+        self._save()
+
         result = check_for_updates()
         if not result.get("ok", False):
+            if silent_error:
+                return
             QMessageBox.warning(
                 self.vis,
                 "Update Check",
@@ -213,7 +237,7 @@ class TrayManager(QSystemTrayIcon):
                 f"Latest: {latest_version}\n"
                 f"Release: {release_name}"
             )
-            open_btn = msg.addButton("Open Download Page", QMessageBox.ButtonRole.AcceptRole)
+            open_btn = msg.addButton("Open Release Page", QMessageBox.ButtonRole.AcceptRole)
             msg.addButton(QMessageBox.StandardButton.Close)
             msg.exec()
             if msg.clickedButton() == open_btn and release_url:
@@ -222,10 +246,13 @@ class TrayManager(QSystemTrayIcon):
                 webbrowser.open(release_url)
             return
 
+        if silent_no_update:
+            return
+
         QMessageBox.information(
             self.vis,
             "Update Check",
-            f"You are up to date.\n\nCurrent version: {current_version}",
+            f"You are up to date.\n\nCurrent version: {current_version}\nLatest available: {latest_version}",
         )
 
     def _quit(self):

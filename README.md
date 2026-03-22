@@ -357,6 +357,38 @@ The installer uses `assets/app_icon.ico` for setup branding and Start menu short
 - Optional startup-at-login registry entry.
 - Adds proper uninstaller entry.
 
+## Version Tags And GitHub Releases
+
+This project now supports semantic version tags in `vX.Y.Z` format (for example, `v1.0.1` or `v1.1.0`).
+
+### Option A: Create And Push A Tag Locally (PowerShell)
+
+```powershell
+.\create_semver_tag.ps1 -Version 1.0.1
+```
+
+Optional custom tag message:
+
+```powershell
+.\create_semver_tag.ps1 -Version 1.1.0 -Message "Release v1.1.0"
+```
+
+What happens:
+
+- Validates semver format.
+- Verifies the tag does not already exist.
+- Creates an annotated tag like `v1.0.1`.
+- Pushes the tag to `origin`.
+- Triggers automatic GitHub release publishing.
+
+### Option B: Create A Tag From GitHub Actions UI
+
+Use the `Create Semver Tag` workflow in GitHub Actions and provide the version without the `v` prefix (example: `1.2.0`).
+
+### Automatic Release Publishing
+
+When a tag matching `v*` is pushed, the `Release on Tag` workflow automatically creates a GitHub Release with generated notes.
+
 ## Performance
 
 ### Resource Usage

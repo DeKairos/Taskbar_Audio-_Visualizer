@@ -21,6 +21,9 @@ DEFAULTS = {
     "beat_flash": True,
     "theme": "album_art",     # color theme
     "startup": False,
+    "auto_update_check": True,
+    "update_check_interval_hours": 24,
+    "last_update_check_ts": 0.0,
 }
 
 

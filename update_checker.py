@@ -14,7 +14,7 @@ import urllib.request
 
 GITHUB_OWNER = "DeKairos"
 GITHUB_REPO = "Taskbar_Audio-_Visualizer"
-DEFAULT_VERSION = "1.0.0"
+DEFAULT_VERSION = "0.0.0"
 RELEASES_URL = (
     f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 )
@@ -31,8 +31,45 @@ def _parse_semver(value: str) -> tuple[int, int, int]:
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
+def _is_valid_semver(value: str) -> bool:
+    """Return True for semver-like values such as 1.2.3 or 1.2.3-rc.1."""
+    return bool(re.match(r"^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$", value or ""))
+
+
+def _current_version_from_git(timeout: float = 2.5) -> str | None:
+    """Best-effort app version for dev runs from the latest reachable semver tag."""
+    base_dir = os.path.dirname(__file__)
+    try:
+        out = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+            cwd=base_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        ).stdout.strip()
+        if not out:
+            return None
+        m = re.search(r"(\d+\.\d+\.\d+)", out)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _select_highest_semver_tag(tag_names: list[str]) -> str:
+    """Pick the highest semver-like tag name from a list of tag names."""
+    best_name = ""
+    best_semver = (0, 0, 0)
+    for name in tag_names:
+        sem = _parse_semver(name)
+        if sem > best_semver:
+            best_semver = sem
+            best_name = name
+    return best_name
+
+
 def get_current_version() -> str:
-    """Return installed app version (packaged) or default dev version."""
+    """Return installed app version, env override, git tag fallback, or default."""
     if getattr(sys, "frozen", False):
         try:
             base = os.path.dirname(sys.executable)
@@ -45,6 +82,15 @@ def get_current_version() -> str:
                     return m.group(1)
         except Exception:
             pass
+
+    env_version = os.getenv("AUDIO_VISUALIZER_VERSION", "").strip()
+    if _is_valid_semver(env_version):
+        return env_version.split("+", 1)[0].split("-", 1)[0]
+
+    git_version = _current_version_from_git()
+    if git_version:
+        return git_version
+
     return DEFAULT_VERSION
 
 
@@ -95,8 +141,7 @@ def _latest_version_from_git_tags(timeout: float = 8.0):
             timeout=timeout,
         ).stdout.splitlines()
 
-        best_ver = (0, 0, 0)
-        best_name = ""
+        tag_names: list[str] = []
         for line in tag_lines:
             parts = line.strip().split()
             if len(parts) < 2:
@@ -105,11 +150,10 @@ def _latest_version_from_git_tags(timeout: float = 8.0):
             if not ref.startswith("refs/tags/"):
                 continue
             tag_name = ref.split("refs/tags/", 1)[1]
-            sem = _parse_semver(tag_name)
-            if sem > best_ver:
-                best_ver = sem
-                best_name = tag_name
+            tag_names.append(tag_name)
 
+        best_name = _select_highest_semver_tag(tag_names)
+        best_ver = _parse_semver(best_name)
         if best_ver == (0, 0, 0):
             return None
 
@@ -163,7 +207,7 @@ def check_for_updates(timeout: float = 6.0) -> dict:
             }
         # Some repositories don't publish releases; fall back to latest tag.
         try:
-            tags = _fetch_json(TAGS_URL, timeout)
+            tags = _fetch_json(f"{TAGS_URL}?per_page=100", timeout)
             if not isinstance(tags, list) or not tags:
                 return {
                     "ok": False,
@@ -174,10 +218,21 @@ def check_for_updates(timeout: float = 6.0) -> dict:
                     "release_url": "",
                     "release_name": "",
                 }
-            tag_name = str(tags[0].get("name") or "")
+            tag_names = [str(tag.get("name") or "") for tag in tags]
+            tag_name = _select_highest_semver_tag(tag_names)
+            if not tag_name:
+                return {
+                    "ok": False,
+                    "error": "No semver tags found",
+                    "current_version": current_version,
+                    "latest_version": "",
+                    "update_available": False,
+                    "release_url": "",
+                    "release_name": "",
+                }
             latest_semver = _parse_semver(tag_name)
             latest_version = ".".join(str(x) for x in latest_semver)
-            release_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
+            release_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag_name}"
             release_name = tag_name or "Latest tag"
         except Exception:
             git_fallback = _latest_version_from_git_tags(timeout=max(8.0, timeout))
