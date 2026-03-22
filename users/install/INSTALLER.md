@@ -49,6 +49,20 @@ If the repository is private, set `$token` to a GitHub token with access to that
 3. Finish installation.
 4. Launch Audio Visualizer from the Start Menu.
 
+## Updating Installed App
+
+If you installed with the setup EXE, you can update from inside the app:
+
+1. Open tray menu.
+2. Click Check for updates.
+3. If a new version exists, click Download and Install.
+4. The app downloads the latest setup file, starts the installer, then exits.
+
+Notes:
+
+- This option appears when the release contains an installer asset named AudioVisualizer-Setup-<version>.exe.
+- If download/start fails, use Open Release Page and run the setup manually.
+
 ## If You Prefer No Installer
 
 If you do not want to install anything, download `AudioVisualizer-Portable-<version>.exe` from the same release page and run it directly.

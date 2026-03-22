@@ -1,11 +1,12 @@
 """
 Audio Visualizer — transparent overlay on the Windows taskbar.
-Features: glow, click-through, left-side positioning, beat detection,
+Features: glow, click-through, left-side positioning, beat pulse background,
 waveform mode, auto-hide, preset themes, album art colors, volume control.
 """
 import ctypes
 import ctypes.wintypes
 import time
+import random
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtCore import Qt, QTimer, QPointF, QEvent, QRectF, pyqtSignal
@@ -54,10 +55,15 @@ class VisualizerWindow(QWidget):
         self.fft_data = np.zeros(num)
         self.smoothed = np.zeros(num)
 
-        # Beat detection state
+        # Beat-driven visual motion state
         self._bass_history = []
-        self._beat_flash = 0.0       # 0.0 = no flash, 1.0 = full flash
-        self._beat_decay = 0.06      # how fast flash fades per frame
+        self._bg_pulse = 0.0         # 0.0 = calm, 1.0 = strong beat pulse
+        self._bg_decay = 0.045       # pulse fade rate per frame
+        self._bg_phase = 0.0         # animated background drift phase
+
+        # Subtle particle dust for texture in compact taskbar mode.
+        self._particles = []
+        self._particle_cap = 24
 
         # Auto-hide state
         self._last_sound_time = time.time()
@@ -335,7 +341,7 @@ class VisualizerWindow(QWidget):
                 self._bass_history.pop(0)
             avg_bass = np.mean(self._bass_history) if self._bass_history else 0
             if bass > avg_bass * 1.8 and bass > 5.0:
-                self._beat_flash = 1.0
+                self._bg_pulse = 1.0
 
     # ====================== TICK / AUTO-HIDE =========================
 
@@ -364,9 +370,12 @@ class VisualizerWindow(QWidget):
                 self._opacity = 1.0
                 self.setWindowOpacity(self._opacity)
 
-        # Decay beat flash
-        if self._beat_flash > 0:
-            self._beat_flash = max(0, self._beat_flash - self._beat_decay)
+        # Decay beat pulse and animate the moving background.
+        if self._bg_pulse > 0:
+            self._bg_pulse = max(0, self._bg_pulse - self._bg_decay)
+        self._bg_phase = (self._bg_phase + 0.018) % 1.0
+
+        self._update_particles()
 
         # Update media overlay visibility/alpha.
         self._update_media_overlay_state()
@@ -490,6 +499,104 @@ class VisualizerWindow(QWidget):
         right_gain = 0.88 + (0.52 * high_norm)
         return left_gain, right_gain
 
+    def _update_particles(self):
+        """Update lightweight ambient particles used as subtle visual texture."""
+        if not self.cfg.get("glow", True):
+            self._particles.clear()
+            return
+
+        if len(self.fft_data) == 0:
+            self._particles.clear()
+            return
+
+        max_val = max(float(np.max(self.fft_data)), 0.001)
+        energy = float(np.mean(self.fft_data) / max_val)
+        energy = max(0.0, min(1.0, energy))
+
+        spawn_budget = 0
+        if self.cfg.get("enabled", True) and self._opacity > 0.15:
+            if energy > 0.18:
+                spawn_budget += 1
+            if self._bg_pulse > 0.25:
+                spawn_budget += 1
+
+        for _ in range(spawn_budget):
+            if len(self._particles) >= self._particle_cap:
+                break
+            self._particles.append(
+                {
+                    "x": random.uniform(0.0, max(1.0, float(self.width()))),
+                    "y": random.uniform(float(self.height()) * 0.35, float(self.height()) + 4.0),
+                    "vx": random.uniform(-0.15, 0.15),
+                    "vy": random.uniform(-0.45, -0.1),
+                    "life": random.uniform(0.55, 1.0),
+                    "size": random.uniform(1.3, 2.6),
+                }
+            )
+
+        alive = []
+        width = float(max(1, self.width()))
+        for pt in self._particles:
+            pt["x"] += pt["vx"]
+            pt["y"] += pt["vy"]
+            pt["life"] -= 0.016
+
+            if pt["x"] < -6.0:
+                pt["x"] = width + 2.0
+            elif pt["x"] > width + 6.0:
+                pt["x"] = -2.0
+
+            if pt["life"] > 0.0 and pt["y"] > -6.0:
+                alive.append(pt)
+        self._particles = alive
+
+    def _paint_dynamic_background(self, p: QPainter, w: int, h: int):
+        """Beat-synced moving gradient: dynamic but calm enough for taskbar use."""
+        if not self.cfg.get("glow", True) and not self.cfg.get("beat_flash", True):
+            return
+
+        theme = self._resolve_theme()
+        br, bg, bb = theme["base"]
+        gr, gg, gb = theme["glow"]
+
+        phase = self._bg_phase
+        shift = int(w * (0.5 + 0.5 * np.sin(phase * np.pi * 2.0)))
+        pulse = self._bg_pulse if self.cfg.get("beat_flash", True) else 0.0
+
+        # Keep idle state very dim; let beat pulses carry most of the look.
+        ambient = 3 if self.cfg.get("glow", True) else 0
+        a0 = int(ambient + (14 * pulse))
+        a1 = int(max(0, ambient - 1) + (18 * pulse))
+        a2 = int(max(0, ambient - 2) + (10 * pulse))
+
+        # Avoid drawing an always-on tint when both ambient and pulse are tiny.
+        if (a0 + a1 + a2) <= 2:
+            return
+
+        grad = QLinearGradient(-int(w * 0.2) + shift, 0, int(w * 1.2) - shift, h)
+        grad.setColorAt(0.0, QColor(br, bg, bb, a0))
+        grad.setColorAt(0.5, QColor(gr, gg, gb, a1))
+        grad.setColorAt(1.0, QColor(br, bg, bb, a2))
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRect(0, 0, w, h)
+
+    def _paint_particles(self, p: QPainter):
+        if not self.cfg.get("glow", True) or not self._particles:
+            return
+
+        theme = self._resolve_theme()
+        r, g, b = theme["glow"]
+        p.setPen(Qt.PenStyle.NoPen)
+
+        for pt in self._particles:
+            alpha = int(24 * pt["life"] + (16 * self._bg_pulse))
+            if alpha <= 0:
+                continue
+            p.setBrush(QBrush(QColor(r, g, b, min(56, alpha))))
+            p.drawEllipse(QPointF(pt["x"], pt["y"]), pt["size"], pt["size"])
+
     # ====================== PAINTING =================================
 
     def paintEvent(self, event):
@@ -502,6 +609,8 @@ class VisualizerWindow(QWidget):
         mode = self.cfg.get("mode", "bars")
         intro_t = self._startup_progress()
         morph = self._track_morph_amount()
+
+        self._paint_dynamic_background(p, w, h)
 
         if morph > 0.001:
             p.save()
@@ -533,6 +642,8 @@ class VisualizerWindow(QWidget):
             else:
                 self._paint_bars(p, w, h)
 
+        self._paint_particles(p)
+
         if morph > 0.001:
             p.restore()
             # Tint briefly with current accent color during the morph.
@@ -541,11 +652,6 @@ class VisualizerWindow(QWidget):
             wash_alpha = int(55 * morph)
             if wash_alpha > 0:
                 p.fillRect(0, 0, w, h, QColor(br, bg, bb, wash_alpha))
-
-        # Beat flash overlay
-        if self._beat_flash > 0.01:
-            alpha = int(self._beat_flash * 40)
-            p.fillRect(0, 0, w, h, QColor(180, 220, 255, alpha))
 
         # Volume overlay (if hovering on visualizer)
         if self.volume_scroller and self.volume_scroller.show_volume:
@@ -626,7 +732,7 @@ class VisualizerWindow(QWidget):
                 cx = x + bar_w / 2
                 cy = y + bar_h / 2
                 grad = QRadialGradient(QPointF(cx, cy), glow_r)
-                glow_alpha = int(norm * 80)
+                glow_alpha = int(norm * 56)
                 grad.setColorAt(0.0, QColor(r, g, b, glow_alpha))
                 grad.setColorAt(1.0, QColor(r, g, b, 0))
                 p.setBrush(QBrush(grad))
@@ -676,7 +782,7 @@ class VisualizerWindow(QWidget):
 
         # Glow: thick blurred line behind
         if self.cfg.get("glow", True):
-            glow_pen = QPen(QColor(gr, gg, gb, 50), 12)
+            glow_pen = QPen(QColor(gr, gg, gb, 36), 10)
             glow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             p.setPen(glow_pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -733,7 +839,7 @@ class VisualizerWindow(QWidget):
                 glow_r = int(bar_w * 2.5)
                 cx = x + bar_w / 2
                 grad = QRadialGradient(QPointF(cx, mid_y), glow_r)
-                glow_alpha = int(norm * 80)
+                glow_alpha = int(norm * 56)
                 grad.setColorAt(0.0, QColor(r, g, b, glow_alpha))
                 grad.setColorAt(1.0, QColor(r, g, b, 0))
                 p.setBrush(QBrush(grad))

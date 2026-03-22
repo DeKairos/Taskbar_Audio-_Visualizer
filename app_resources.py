@@ -32,14 +32,18 @@ def get_resource_path(relative_path: str) -> str:
 
 
 def get_app_icon() -> QIcon:
-    """Return the app icon, with a fallback to the executable icon when frozen."""
-    icon = QIcon(get_resource_path(os.path.join("assets", "app_icon.ico")))
-    if not icon.isNull():
-        return icon
+    """Return app icon.
 
+    Frozen builds prefer the executable icon so installer upgrades cannot be
+    masked by a stale copied assets/app_icon.ico file.
+    """
     if getattr(sys, "frozen", False):
         exe_icon = QIcon(sys.executable)
         if not exe_icon.isNull():
             return exe_icon
+
+    icon = QIcon(get_resource_path(os.path.join("assets", "app_icon.ico")))
+    if not icon.isNull():
+        return icon
 
     return QIcon()

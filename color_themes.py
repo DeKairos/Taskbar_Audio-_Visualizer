@@ -47,6 +47,34 @@ THEMES = {
         "bg":   (100, 255, 120),
         "rainbow": False,
     },
+    "aurora": {
+        "base": (45, 170, 140),
+        "peak": (150, 250, 210),
+        "glow": (90, 225, 185),
+        "bg":   (120, 230, 205),
+        "rainbow": False,
+    },
+    "retro_vu": {
+        "base": (210, 150, 40),
+        "peak": (255, 220, 110),
+        "glow": (235, 175, 60),
+        "bg":   (255, 210, 120),
+        "rainbow": False,
+    },
+    "minimal_studio": {
+        "base": (85, 180, 205),
+        "peak": (205, 240, 250),
+        "glow": (130, 210, 230),
+        "bg":   (160, 225, 240),
+        "rainbow": False,
+    },
+    "neon_grid": {
+        "base": (45, 210, 250),
+        "peak": (190, 245, 255),
+        "glow": (90, 225, 255),
+        "bg":   (140, 230, 255),
+        "rainbow": False,
+    },
     "rainbow": {
         "base": (255, 0, 0),     # unused — per-bar hue
         "peak": (255, 255, 255),
@@ -63,6 +91,10 @@ THEME_DISPLAY = {                           # tray menu labels
     "neon_purple": "Neon Purple",
     "sunset":      "Sunset",
     "matrix":      "Matrix Green",
+    "aurora":      "Aurora",
+    "retro_vu":    "Retro VU",
+    "minimal_studio": "Minimal Studio",
+    "neon_grid":   "Neon Grid",
     "rainbow":     "Rainbow",
 }
 

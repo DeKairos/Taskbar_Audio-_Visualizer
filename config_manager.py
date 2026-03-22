@@ -18,7 +18,7 @@ DEFAULTS = {
     "auto_hide": True,
     "auto_hide_timeout": 5.0, # seconds
     "glow": True,
-    "beat_flash": True,
+    "beat_flash": True,      # legacy key: controls beat pulse background
     "theme": "album_art",     # color theme
     "startup": False,
     "auto_update_check": True,

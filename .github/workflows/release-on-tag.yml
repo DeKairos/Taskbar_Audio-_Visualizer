@@ -15,6 +15,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve release version
+        id: vars
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          if (-not $version) {
+            throw "Could not resolve release version from tag '${{ github.ref_name }}'"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -64,13 +74,13 @@ jobs:
       - name: Build installer artifacts
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = "${{ steps.vars.outputs.version }}"
           .\package_release.ps1 -Version $version -Publisher "Audio Visualizer" -AppUrl "https://github.com/${{ github.repository }}"
 
       - name: Package portable build zip
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = "${{ steps.vars.outputs.version }}"
           $zipPath = ".\dist\AudioVisualizer-Portable-$version.zip"
           if (Test-Path $zipPath) {
             Remove-Item $zipPath -Force
@@ -80,7 +90,7 @@ jobs:
       - name: Build standalone portable exe
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $version = "${{ steps.vars.outputs.version }}"
           .\build_release.ps1 -Version $version -CompanyName "Audio Visualizer" -ProductName "Audio Visualizer" -OneFile -SkipClean
 
           $standalonePath = ".\dist\AudioVisualizer.exe"
@@ -91,12 +101,29 @@ jobs:
           $versionedStandalonePath = ".\dist\AudioVisualizer-Portable-$version.exe"
           Copy-Item $standalonePath $versionedStandalonePath -Force
 
+      - name: Verify release assets exist
+        shell: pwsh
+        run: |
+          $version = "${{ steps.vars.outputs.version }}"
+          $required = @(
+            ".\dist\AudioVisualizer-Setup-$version.exe",
+            ".\dist\AudioVisualizer-Portable-$version.zip",
+            ".\dist\AudioVisualizer-Portable-$version.exe"
+          )
+
+          foreach ($path in $required) {
+            if (!(Test-Path $path)) {
+              throw "Missing release asset: $path"
+            }
+            Write-Host "Found asset: $path"
+          }
+
       - name: Create GitHub release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            dist/AudioVisualizer-Setup-*.exe
-            dist/AudioVisualizer-Portable-*.zip
-            dist/AudioVisualizer-Portable-*.exe
+            dist/AudioVisualizer-Setup-${{ steps.vars.outputs.version }}.exe
+            dist/AudioVisualizer-Portable-${{ steps.vars.outputs.version }}.zip
+            dist/AudioVisualizer-Portable-${{ steps.vars.outputs.version }}.exe

@@ -20,6 +20,12 @@ Use this page when installation succeeded but the app is not behaving as expecte
 - Reboot Windows once and retry.
 - Reinstall using the latest installer file.
 
+## Tray Icon Did Not Change After Update
+
+- Exit Audio Visualizer fully from the tray menu before running a new installer.
+- After install, launch the app from Start Menu.
+- If Windows still shows the old icon, restart Windows Explorer (or sign out/in once) to clear tray icon cache.
+
 ## High CPU Or Lag
 
 - Close other heavy apps and test again.

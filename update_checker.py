@@ -8,7 +8,9 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -19,6 +21,8 @@ RELEASES_URL = (
     f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 )
 TAGS_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
+RELEASES_LATEST_WEB_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+INSTALLER_ASSET_REGEX = re.compile(r"^AudioVisualizer-Setup-.*\\.exe$", re.IGNORECASE)
 
 
 def _parse_semver(value: str) -> tuple[int, int, int]:
@@ -117,6 +121,52 @@ def _normalize_repo_web_url(remote_url: str) -> str:
     return url
 
 
+def _http_error_message(e: urllib.error.HTTPError) -> str:
+    """Return a user-friendly HTTP error message for update checks."""
+    code = getattr(e, "code", None)
+    headers = getattr(e, "headers", {}) or {}
+
+    # GitHub unauthenticated rate limit often appears as HTTP 403 with remaining=0.
+    remaining = str(headers.get("X-RateLimit-Remaining", "")).strip()
+    reset_raw = str(headers.get("X-RateLimit-Reset", "")).strip()
+    retry_after_raw = str(headers.get("Retry-After", "")).strip()
+
+    is_rate_limited = code == 429 or (code == 403 and remaining == "0")
+    if not is_rate_limited:
+        return f"GitHub API HTTP {code}"
+
+    wait_seconds = None
+    if retry_after_raw.isdigit():
+        wait_seconds = int(retry_after_raw)
+    elif reset_raw.isdigit():
+        reset_ts = int(reset_raw)
+        wait_seconds = max(0, reset_ts - int(time.time()))
+
+    if wait_seconds is None:
+        return "GitHub API rate limit reached. Please try again later."
+
+    wait_minutes = max(1, int((wait_seconds + 59) / 60))
+    return f"GitHub API rate limit reached. Try again in about {wait_minutes} minute(s)."
+
+
+def _select_installer_asset(assets: list[dict]) -> tuple[str, str]:
+    """Return (url, name) for the installer exe asset if available."""
+    if not isinstance(assets, list):
+        return ("", "")
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        if not INSTALLER_ASSET_REGEX.match(name):
+            continue
+        url = str(asset.get("browser_download_url") or "")
+        if url:
+            return (url, name)
+
+    return ("", "")
+
+
 def _latest_version_from_git_tags(timeout: float = 8.0):
     """Best-effort latest semver tag lookup using local git + origin remote."""
     base_dir = os.path.dirname(__file__)
@@ -167,6 +217,43 @@ def _latest_version_from_git_tags(timeout: float = 8.0):
         return None
 
 
+def _latest_version_from_web_release(timeout: float = 6.0):
+    """Best-effort latest release lookup via GitHub web redirect (non-API)."""
+    try:
+        req = urllib.request.Request(
+            RELEASES_LATEST_WEB_URL,
+            headers={"User-Agent": "AudioVisualizer-UpdateChecker"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            final_url = str(resp.geturl() or "")
+
+        m = re.search(r"/releases/tag/([^/?#]+)", final_url)
+        if not m:
+            return None
+
+        tag_name = urllib.parse.unquote(m.group(1))
+        sem = _parse_semver(tag_name)
+        if sem == (0, 0, 0):
+            return None
+
+        latest_version = ".".join(str(x) for x in sem)
+        installer_asset_name = f"AudioVisualizer-Setup-{latest_version}.exe"
+        installer_asset_url = (
+            f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest/download/"
+            f"{installer_asset_name}"
+        )
+
+        return {
+            "latest_version": latest_version,
+            "release_name": tag_name,
+            "release_url": final_url,
+            "installer_asset_url": installer_asset_url,
+            "installer_asset_name": installer_asset_name,
+        }
+    except Exception:
+        return None
+
+
 def check_for_updates(timeout: float = 6.0) -> dict:
     """
     Check latest GitHub release and compare with current version.
@@ -180,6 +267,8 @@ def check_for_updates(timeout: float = 6.0) -> dict:
         "update_available": bool,
         "release_url": str,
         "release_name": str,
+        "installer_asset_url": str,
+        "installer_asset_name": str,
       }
     """
     current_version = get_current_version()
@@ -187,6 +276,8 @@ def check_for_updates(timeout: float = 6.0) -> dict:
     latest_version = ""
     release_url = ""
     release_name = ""
+    installer_asset_url = ""
+    installer_asset_name = ""
     try:
         data = _fetch_json(RELEASES_URL, timeout)
         latest_raw = str(data.get("tag_name") or data.get("name") or "")
@@ -194,61 +285,107 @@ def check_for_updates(timeout: float = 6.0) -> dict:
         latest_version = ".".join(str(x) for x in latest_semver)
         release_url = str(data.get("html_url") or "")
         release_name = str(data.get("name") or latest_raw or "Latest release")
+        installer_asset_url, installer_asset_name = _select_installer_asset(data.get("assets") or [])
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            return {
-                "ok": False,
-                "error": f"GitHub API HTTP {e.code}",
-                "current_version": current_version,
-                "latest_version": "",
-                "update_available": False,
-                "release_url": "",
-                "release_name": "",
-            }
-        # Some repositories don't publish releases; fall back to latest tag.
-        try:
-            tags = _fetch_json(f"{TAGS_URL}?per_page=100", timeout)
-            if not isinstance(tags, list) or not tags:
+            web_fallback = _latest_version_from_web_release(timeout=max(6.0, timeout))
+            if web_fallback:
+                latest_version = web_fallback["latest_version"]
+                release_name = web_fallback["release_name"]
+                release_url = web_fallback["release_url"]
+                installer_asset_url = web_fallback["installer_asset_url"]
+                installer_asset_name = web_fallback["installer_asset_name"]
+            else:
                 return {
                     "ok": False,
-                    "error": "No releases or tags found",
+                    "error": _http_error_message(e),
                     "current_version": current_version,
                     "latest_version": "",
                     "update_available": False,
                     "release_url": "",
                     "release_name": "",
+                    "installer_asset_url": "",
+                    "installer_asset_name": "",
                 }
-            tag_names = [str(tag.get("name") or "") for tag in tags]
-            tag_name = _select_highest_semver_tag(tag_names)
-            if not tag_name:
-                return {
-                    "ok": False,
-                    "error": "No semver tags found",
-                    "current_version": current_version,
-                    "latest_version": "",
-                    "update_available": False,
-                    "release_url": "",
-                    "release_name": "",
-                }
-            latest_semver = _parse_semver(tag_name)
-            latest_version = ".".join(str(x) for x in latest_semver)
-            release_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag_name}"
-            release_name = tag_name or "Latest tag"
-        except Exception:
-            git_fallback = _latest_version_from_git_tags(timeout=max(8.0, timeout))
-            if not git_fallback:
-                return {
-                    "ok": False,
-                    "error": "No releases or tags found",
-                    "current_version": current_version,
-                    "latest_version": "",
-                    "update_available": False,
-                    "release_url": "",
-                    "release_name": "",
-                }
-            latest_version = git_fallback["latest_version"]
-            release_url = git_fallback["release_url"]
-            release_name = git_fallback["release_name"]
+        else:
+            # Some repositories don't publish releases; fall back to latest tag.
+            try:
+                tags = _fetch_json(f"{TAGS_URL}?per_page=100", timeout)
+                if not isinstance(tags, list) or not tags:
+                    return {
+                        "ok": False,
+                        "error": "No releases or tags found",
+                        "current_version": current_version,
+                        "latest_version": "",
+                        "update_available": False,
+                        "release_url": "",
+                        "release_name": "",
+                        "installer_asset_url": "",
+                        "installer_asset_name": "",
+                    }
+                tag_names = [str(tag.get("name") or "") for tag in tags]
+                tag_name = _select_highest_semver_tag(tag_names)
+                if not tag_name:
+                    return {
+                        "ok": False,
+                        "error": "No semver tags found",
+                        "current_version": current_version,
+                        "latest_version": "",
+                        "update_available": False,
+                        "release_url": "",
+                        "release_name": "",
+                        "installer_asset_url": "",
+                        "installer_asset_name": "",
+                    }
+                latest_semver = _parse_semver(tag_name)
+                latest_version = ".".join(str(x) for x in latest_semver)
+                release_url = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag_name}"
+                release_name = tag_name or "Latest tag"
+            except urllib.error.HTTPError as tags_error:
+                web_fallback = _latest_version_from_web_release(timeout=max(6.0, timeout))
+                if web_fallback:
+                    latest_version = web_fallback["latest_version"]
+                    release_name = web_fallback["release_name"]
+                    release_url = web_fallback["release_url"]
+                    installer_asset_url = web_fallback["installer_asset_url"]
+                    installer_asset_name = web_fallback["installer_asset_name"]
+                else:
+                    return {
+                        "ok": False,
+                        "error": _http_error_message(tags_error),
+                        "current_version": current_version,
+                        "latest_version": "",
+                        "update_available": False,
+                        "release_url": "",
+                        "release_name": "",
+                        "installer_asset_url": "",
+                        "installer_asset_name": "",
+                    }
+            except Exception:
+                git_fallback = _latest_version_from_git_tags(timeout=max(8.0, timeout))
+                if git_fallback:
+                    latest_version = git_fallback["latest_version"]
+                    release_url = git_fallback["release_url"]
+                    release_name = git_fallback["release_name"]
+                else:
+                    web_fallback = _latest_version_from_web_release(timeout=max(6.0, timeout))
+                    if not web_fallback:
+                        return {
+                            "ok": False,
+                            "error": "No releases or tags found",
+                            "current_version": current_version,
+                            "latest_version": "",
+                            "update_available": False,
+                            "release_url": "",
+                            "release_name": "",
+                            "installer_asset_url": "",
+                            "installer_asset_name": "",
+                        }
+                    latest_version = web_fallback["latest_version"]
+                    release_name = web_fallback["release_name"]
+                    release_url = web_fallback["release_url"]
+                    installer_asset_url = web_fallback["installer_asset_url"]
+                    installer_asset_name = web_fallback["installer_asset_name"]
     except Exception as e:
         return {
             "ok": False,
@@ -258,6 +395,8 @@ def check_for_updates(timeout: float = 6.0) -> dict:
             "update_available": False,
             "release_url": "",
             "release_name": "",
+            "installer_asset_url": "",
+            "installer_asset_name": "",
         }
 
     current_semver = _parse_semver(current_version)
@@ -271,4 +410,6 @@ def check_for_updates(timeout: float = 6.0) -> dict:
         "update_available": latest_semver > current_semver,
         "release_url": release_url,
         "release_name": release_name,
+        "installer_asset_url": installer_asset_url,
+        "installer_asset_name": installer_asset_name,
     }

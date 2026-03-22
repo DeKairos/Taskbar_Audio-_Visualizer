@@ -1,5 +1,5 @@
 Param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.1.0",
     [string]$Publisher = "Audio Visualizer",
     [string]$AppUrl = "https://example.com"
 )

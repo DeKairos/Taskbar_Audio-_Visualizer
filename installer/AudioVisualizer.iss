@@ -5,7 +5,7 @@
 	#define MyAppExeName "AudioVisualizer.exe"
 #endif
 #ifndef MyAppVersion
-	#define MyAppVersion "1.0.0"
+	#define MyAppVersion "1.1.0"
 #endif
 #ifndef MyPublisher
 	#define MyPublisher "Audio Visualizer"
@@ -33,6 +33,10 @@ PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\assets\app_icon.ico
+CloseApplications=yes
+CloseApplicationsFilter={#MyAppExeName}
+CloseApplicationsForce=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
