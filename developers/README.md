@@ -1,6 +1,6 @@
 # Developers Guide
 
-This section is for contributors and maintainers.
+This section is for contributors and maintainers working on source code, packaging, and releases.
 
 ## Start Here
 
@@ -14,3 +14,11 @@ This section is for contributors and maintainers.
 - Main documentation: ../README.md
 - Quickstart: setup/QUICKSTART.md
 - Installation and packaging: ../users/install/INSTALLATION.md
+
+## Recommended Reading Order
+
+1. setup/SETUP.md
+2. setup/QUICKSTART.md
+3. workflow/BUILD_AND_RELEASE.md
+4. workflow/CLEANUP.md
+5. reference/PROJECT_MAP.md

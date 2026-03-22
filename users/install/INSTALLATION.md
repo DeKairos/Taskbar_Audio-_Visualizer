@@ -1,6 +1,8 @@
 # Audio Visualizer Installation Guide
 
-This guide explains how to install and run Audio Visualizer on another Windows PC.
+This guide explains all supported ways to install or run Audio Visualizer.
+
+Use this file when you need full details. For a short installer-only path, use [INSTALLER.md](INSTALLER.md).
 
 ## Option 1: Installer (recommended for most users)
 
@@ -16,7 +18,7 @@ Notes:
 - No Python or VS Code is required for end users.
 - The visualizer runs as a normal desktop app.
 
-## Option 2: Portable App Folder
+## Option 2: Portable App Folder (no installer)
 
 If you share only the app folder (`dist/AudioVisualizer`), users can run:
 
@@ -39,7 +41,7 @@ Prerequisites:
 
 Steps:
 
-1. Open PowerShell in the project folder.
+1. Open PowerShell in the project root folder.
 2. Create or use the existing virtual environment in `venv_win`.
 3. Install dependencies:
 
@@ -67,6 +69,12 @@ Expected outputs:
 - Installer: `dist\AudioVisualizer-Setup-1.0.1.exe`
 
 If setup compilation fails, install Inno Setup 6 and confirm `ISCC.exe` is available.
+
+Quick install command:
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e --accept-package-agreements --accept-source-agreements --silent
+```
 
 ## Troubleshooting Packaging Failures
 
@@ -102,6 +110,11 @@ Get-ChildItem .\dist
 ```
 
 If `dist\\AudioVisualizer-Setup-<version>.exe` is present, the installer is ready to share.
+
+## Where To Go Next
+
+- First run checks: [../use/FIRST_RUN.md](../use/FIRST_RUN.md)
+- Troubleshooting: [../help/TROUBLESHOOTING.md](../help/TROUBLESHOOTING.md)
 
 ## First-Run Check
 
