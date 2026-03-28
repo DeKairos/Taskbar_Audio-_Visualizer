@@ -17,9 +17,20 @@ from app_resources import get_app_icon
 
 
 class TrayManager(QSystemTrayIcon):
-    def __init__(self, visualizer_window, audio_thread, config: dict):
-        icon = get_app_icon()
-        if icon.isNull():
+    def __init__(self, visualizer_window, audio_thread, config: dict, app_icon=None):
+        icon = app_icon
+
+        if icon is None or icon.isNull():
+            app = QApplication.instance()
+            if app is not None:
+                app_window_icon = app.windowIcon()
+                if app_window_icon is not None and not app_window_icon.isNull():
+                    icon = app_window_icon
+
+        if icon is None or icon.isNull():
+            icon = get_app_icon()
+
+        if icon is None or icon.isNull():
             pixmap = QPixmap(32, 32)
             pixmap.fill(QColor(0, 180, 220))
             icon = QIcon(pixmap)
@@ -44,16 +55,43 @@ class TrayManager(QSystemTrayIcon):
 
         # ─── Mode ───
         mode_menu = menu.addMenu("Mode")
-        self.bars_action = QAction("○ Bars", mode_menu)
-        self.wave_action = QAction("○ Waveform", mode_menu)
-        self.mirror_action = QAction("○ Mirror", mode_menu)
-        self.bars_action.triggered.connect(lambda: self._set_mode("bars"))
-        self.wave_action.triggered.connect(lambda: self._set_mode("wave"))
-        self.mirror_action.triggered.connect(lambda: self._set_mode("mirror"))
-        mode_menu.addAction(self.bars_action)
-        mode_menu.addAction(self.wave_action)
-        mode_menu.addAction(self.mirror_action)
-        self._update_mode_labels()
+        # Try to build mode menu from the modes registry. If it's unavailable,
+        # fall back to the legacy hard-coded entries.
+        self._mode_actions = {}
+        try:
+            from modes import list_modes
+            modes_list = list_modes()
+        except Exception:
+            modes_list = None
+
+        if modes_list:
+            for m in modes_list:
+                mode_id = m.get("id")
+                label = m.get("label", mode_id)
+                action = QAction(f"○ {label}", mode_menu)
+                action.setData((mode_id, label))
+                action.triggered.connect(lambda checked, mid=mode_id: self._set_mode(mid))
+                mode_menu.addAction(action)
+                self._mode_actions[mode_id] = action
+            self._update_mode_labels()
+        else:
+            # Legacy static menu (kept for compatibility if registry unavailable)
+            self.bars_action = QAction("○ Bars", mode_menu)
+            self.wave_action = QAction("○ Wave", mode_menu)
+            self.mirror_action = QAction("○ Mirror", mode_menu)
+            self.dot_matrix_action = QAction("○ Dot Matrix", mode_menu)
+            self.skyline_action = QAction("○ Skyline", mode_menu)
+            self.bars_action.triggered.connect(lambda: self._set_mode("bars"))
+            self.wave_action.triggered.connect(lambda: self._set_mode("wave"))
+            self.mirror_action.triggered.connect(lambda: self._set_mode("mirror"))
+            self.dot_matrix_action.triggered.connect(lambda: self._set_mode("dot_matrix"))
+            self.skyline_action.triggered.connect(lambda: self._set_mode("skyline"))
+            mode_menu.addAction(self.bars_action)
+            mode_menu.addAction(self.wave_action)
+            mode_menu.addAction(self.mirror_action)
+            mode_menu.addAction(self.dot_matrix_action)
+            mode_menu.addAction(self.skyline_action)
+            self._update_mode_labels()
 
         # ─── Sensitivity ───
         sens_menu = menu.addMenu("Sensitivity")
@@ -72,6 +110,37 @@ class TrayManager(QSystemTrayIcon):
             action = QAction(f"{prefix} {display_name}", theme_menu)
             action.triggered.connect(lambda checked, t=theme_id: self._set_theme(t))
             theme_menu.addAction(action)
+
+        # ─── Gradient ───
+        gradient_menu = menu.addMenu("Gradient")
+        current_gradient = self.cfg.get("gradient_mode", "off")
+        for label, mode in [
+            ("Off", "off"),
+            ("2-Color", "two_color"),
+            ("3-Color", "three_color"),
+        ]:
+            prefix = "◉" if current_gradient == mode else "○"
+            action = QAction(f"{prefix} {label}", gradient_menu)
+            action.triggered.connect(lambda checked, m=mode: self._set_gradient_mode(m))
+            gradient_menu.addAction(action)
+
+        # ─── Mirror Center ───
+        mirror_menu = menu.addMenu("Mirror Center")
+        center_enabled = bool(self.cfg.get("mirror_center_mode", False))
+        center_toggle = QAction(
+            "✓ Enable Center Gap" if center_enabled else "  Enable Center Gap",
+            mirror_menu,
+        )
+        center_toggle.triggered.connect(self._toggle_mirror_center_mode)
+        mirror_menu.addAction(center_toggle)
+
+        gap_menu = mirror_menu.addMenu("Center Gap")
+        current_gap = int(self.cfg.get("mirror_center_gap", 2) or 2)
+        for gap_val in [0, 2, 4, 6, 8, 10]:
+            prefix = "◉" if current_gap == gap_val else "○"
+            action = QAction(f"{prefix} {gap_val}px", gap_menu)
+            action.triggered.connect(lambda checked, g=gap_val: self._set_mirror_center_gap(g))
+            gap_menu.addAction(action)
 
         menu.addSeparator()
 
@@ -93,6 +162,20 @@ class TrayManager(QSystemTrayIcon):
         )
         self.autohide_action.triggered.connect(self._toggle_autohide)
         menu.addAction(self.autohide_action)
+
+        self.dynamic_quality_action = QAction(
+            "✓ Dynamic Quality" if self.cfg.get("dynamic_quality", True) else "  Dynamic Quality",
+            menu,
+        )
+        self.dynamic_quality_action.triggered.connect(self._toggle_dynamic_quality)
+        menu.addAction(self.dynamic_quality_action)
+
+        self.peak_caps_action = QAction(
+            "✓ Peak Caps" if self.cfg.get("peak_caps_enabled", True) else "  Peak Caps",
+            menu,
+        )
+        self.peak_caps_action.triggered.connect(self._toggle_peak_caps)
+        menu.addAction(self.peak_caps_action)
 
         menu.addSeparator()
 
@@ -141,9 +224,26 @@ class TrayManager(QSystemTrayIcon):
 
     def _update_mode_labels(self):
         cur = self.cfg.get("mode", "bars")
+        # Keep compatibility with older configs where these names mapped to similar visuals.
+        if cur == "oscilloscope":
+            cur = "wave"
+        elif cur == "mirror_tunnel":
+            cur = "mirror"
+        # If we built the menu from the registry, update those labels.
+        if getattr(self, "_mode_actions", None):
+            for mid, action in self._mode_actions.items():
+                data = action.data() or (mid, action.text())
+                label = data[1] if isinstance(data, (list, tuple)) else str(data)
+                action.setText(("◉ " if cur == mid else "○ ") + label)
+            return
+
+        # Legacy static labels
         self.bars_action.setText("◉ Bars" if cur == "bars" else "○ Bars")
-        self.wave_action.setText("◉ Waveform" if cur == "wave" else "○ Waveform")
+        self.wave_action.setText("◉ Wave" if cur == "wave" else "○ Wave")
         self.mirror_action.setText("◉ Mirror" if cur == "mirror" else "○ Mirror")
+        self.dot_matrix_action.setText("◉ Dot Matrix" if cur == "dot_matrix" else "○ Dot Matrix")
+        self.skyline_action.setText("◉ Skyline" if cur == "skyline" else "○ Skyline")
+        # Radar/rotating modes removed; legacy configs mapping still handled elsewhere.
 
     def _set_sensitivity(self, val: float):
         self.cfg["sensitivity"] = val
@@ -155,6 +255,40 @@ class TrayManager(QSystemTrayIcon):
         self.cfg["theme"] = theme
         self.vis.apply_config(self.cfg)
         self._build_menu()  # rebuild to update radio indicators
+        self._save()
+
+    def _set_gradient_mode(self, mode: str):
+        self.cfg["gradient_mode"] = mode
+        self.vis.apply_config(self.cfg)
+        self._build_menu()
+        self._save()
+
+    def _toggle_mirror_center_mode(self):
+        self.cfg["mirror_center_mode"] = not self.cfg.get("mirror_center_mode", False)
+        self.vis.apply_config(self.cfg)
+        self._build_menu()
+        self._save()
+
+    def _set_mirror_center_gap(self, gap_px: int):
+        self.cfg["mirror_center_gap"] = max(0, int(gap_px))
+        self.vis.apply_config(self.cfg)
+        self._build_menu()
+        self._save()
+
+    def _toggle_dynamic_quality(self):
+        self.cfg["dynamic_quality"] = not self.cfg.get("dynamic_quality", True)
+        self.dynamic_quality_action.setText(
+            "✓ Dynamic Quality" if self.cfg["dynamic_quality"] else "  Dynamic Quality"
+        )
+        self.vis.apply_config(self.cfg)
+        self._save()
+
+    def _toggle_peak_caps(self):
+        self.cfg["peak_caps_enabled"] = not self.cfg.get("peak_caps_enabled", True)
+        self.peak_caps_action.setText(
+            "✓ Peak Caps" if self.cfg["peak_caps_enabled"] else "  Peak Caps"
+        )
+        self.vis.apply_config(self.cfg)
         self._save()
 
     def _toggle_glow(self):
@@ -208,6 +342,45 @@ class TrayManager(QSystemTrayIcon):
 
     def _run_silent_startup_update_check(self):
         self._check_for_updates(silent_error=True, silent_no_update=True)
+
+    def _get_release_notes_preview(self, notes: str, max_lines: int = 10, max_chars: int = 700) -> str:
+        if not notes:
+            return ""
+
+        lines = [line.rstrip() for line in str(notes).splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        preview = "\n".join(lines[:max_lines]).strip()
+        if len(preview) > max_chars:
+            preview = preview[:max_chars].rstrip() + "..."
+        if len(lines) > max_lines:
+            preview += "\n..."
+        return preview
+
+    def _is_update_deferred(self) -> bool:
+        defer_until = float(self.cfg.get("update_defer_until_ts", 0.0) or 0.0)
+        return defer_until > time.time()
+
+    def _is_update_skipped(self, latest_version: str) -> bool:
+        skipped = str(self.cfg.get("update_skip_version", "") or "").strip()
+        return bool(skipped and latest_version and skipped == latest_version)
+
+    def _defer_update_prompt(self):
+        remind_hours = float(self.cfg.get("update_remind_after_hours", 24) or 24)
+        remind_hours = max(1.0, remind_hours)
+        self.cfg["update_defer_until_ts"] = time.time() + (remind_hours * 3600.0)
+        self._save()
+
+    def _skip_update_version(self, latest_version: str):
+        self.cfg["update_skip_version"] = str(latest_version or "")
+        self.cfg["update_defer_until_ts"] = 0.0
+        self._save()
+
+    def _clear_update_hold_state(self):
+        self.cfg["update_defer_until_ts"] = 0.0
+        self.cfg["update_skip_version"] = ""
+        self._save()
 
     def _download_and_launch_installer(self, download_url: str, asset_name: str) -> bool:
         if not download_url:
@@ -318,6 +491,7 @@ class TrayManager(QSystemTrayIcon):
             QApplication.restoreOverrideCursor()
 
     def _check_for_updates(self, silent_error: bool = False, silent_no_update: bool = False):
+        is_manual_check = not silent_error and not silent_no_update
         self.cfg["last_update_check_ts"] = time.time()
         self._save()
 
@@ -325,11 +499,22 @@ class TrayManager(QSystemTrayIcon):
         if not result.get("ok", False):
             if silent_error:
                 return
+
+            status = str(result.get("status") or "").strip().lower()
+            reason = str(result.get("error") or "Unknown error")
+            if status == "error-rate-limited":
+                body = (
+                    "Could not check for updates right now because GitHub rate limits were hit.\n\n"
+                    "Please try again in a few minutes, or open the release page manually from the tray menu.\n\n"
+                    f"Details: {reason}"
+                )
+            else:
+                body = f"Could not check for updates.\n\nReason: {reason}"
+
             QMessageBox.warning(
                 self.vis,
                 "Update Check",
-                "Could not check for updates.\n\n"
-                f"Reason: {result.get('error', 'Unknown error')}",
+                body,
             )
             return
 
@@ -337,34 +522,57 @@ class TrayManager(QSystemTrayIcon):
         latest_version = result.get("latest_version", "unknown")
 
         if result.get("update_available", False):
+            if not is_manual_check:
+                if self._is_update_deferred() or self._is_update_skipped(latest_version):
+                    return
+
             release_name = result.get("release_name", "Latest release")
             release_url = result.get("release_url", "")
+            release_notes = result.get("release_notes", "")
             installer_asset_url = result.get("installer_asset_url", "")
             installer_asset_name = result.get("installer_asset_name", "")
+            notes_preview = self._get_release_notes_preview(release_notes)
+
+            dialog_lines = [
+                "A new version is available.",
+                "",
+                f"Current: {current_version}",
+                f"Latest: {latest_version}",
+                f"Release: {release_name}",
+            ]
+            if notes_preview:
+                dialog_lines.extend(["", "Release notes preview:", notes_preview])
+
             msg = QMessageBox(self.vis)
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setWindowTitle("Update Available")
-            msg.setText(
-                f"A new version is available.\n\n"
-                f"Current: {current_version}\n"
-                f"Latest: {latest_version}\n"
-                f"Release: {release_name}"
-            )
+            msg.setText("\n".join(dialog_lines))
             install_btn = None
             if installer_asset_url:
                 install_btn = msg.addButton("Download and Install", QMessageBox.ButtonRole.AcceptRole)
             open_btn = msg.addButton("Open Release Page", QMessageBox.ButtonRole.ActionRole)
+            remind_btn = msg.addButton("Remind me later", QMessageBox.ButtonRole.ActionRole)
+            skip_btn = msg.addButton("Skip this version", QMessageBox.ButtonRole.ActionRole)
             msg.addButton(QMessageBox.StandardButton.Close)
             msg.exec()
 
             if install_btn and msg.clickedButton() == install_btn:
-                self._download_and_launch_installer(installer_asset_url, installer_asset_name)
+                if self._download_and_launch_installer(installer_asset_url, installer_asset_name):
+                    self._clear_update_hold_state()
                 return
 
             if msg.clickedButton() == open_btn and release_url:
                 import webbrowser
 
                 webbrowser.open(release_url)
+                return
+
+            if msg.clickedButton() == remind_btn:
+                self._defer_update_prompt()
+                return
+
+            if msg.clickedButton() == skip_btn:
+                self._skip_update_version(latest_version)
             return
 
         if silent_no_update:

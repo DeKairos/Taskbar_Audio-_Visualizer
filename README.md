@@ -12,7 +12,7 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 - **Album Art Integration**: Automatically extracts dominant color from now-playing album art
 - **Now-Playing Intro Card**: Shows once initially, then appears on-demand when you click the visualizer area
 - **Multiple Themes**: 5 built-in color presets + dynamic album art colors
-- **Multiple Modes**: Bars, waveform, and mirror visualization modes
+- **Multiple Modes**: Bars, waveform, mirror, dot matrix, and skyline (theme-aware) visualization modes
 - **Auto-Hide**: Fades out when silent, returns when sound plays
 
 ### Key Features
@@ -25,7 +25,7 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 ✅ **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
 ✅ **Auto-Start** — Registry integration to run with Windows
 ✅ **Configuration Persistence** — Settings saved to JSON
-✅ **Multiple Visualization Modes** — Bars, waveform, and symmetric mirror modes
+✅ **Multiple Visualization Modes** — Bars, waveform, mirror, dot matrix, and skyline (theme-aware)
 
 ## Architecture
 

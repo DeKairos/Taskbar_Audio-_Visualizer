@@ -12,6 +12,7 @@ import threading
 import time
 import io
 import traceback
+import ctypes
 
 try:
     from winsdk.windows.media.control import (
@@ -25,6 +26,13 @@ try:
     HAS_WINSDK = True
 except ImportError:
     HAS_WINSDK = False
+
+
+# Virtual-Key codes for multimedia keys (used by fallback control)
+VK_MEDIA_NEXT_TRACK = 0xB0
+VK_MEDIA_PREV_TRACK = 0xB1
+VK_MEDIA_STOP = 0xB2
+VK_MEDIA_PLAY_PAUSE = 0xB3
 
 
 class MediaInfo:
@@ -133,6 +141,44 @@ class MediaMonitor:
             except Exception:
                 self.info.cover_bytes = None
                 pass   # thumbnail extraction is best-effort
+
+    # ── Transport control (fallback to media-key simulation) ───────
+    def _send_media_key(self, vk: int):
+        """Send a multimedia key (via Win32) as a best-effort transport control.
+
+        This is used as a lightweight fallback when WinRT control APIs are
+        unavailable or to avoid blocking asyncio loops.
+        """
+        try:
+            # key down
+            ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+            # short pause to ensure the OS registers the key
+            time.sleep(0.02)
+            # key up
+            ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+        except Exception:
+            print(f"[MediaMonitor] failed to send media key 0x{vk:02X}")
+
+    def play(self):
+        """Attempt to start playback (toggle/play-pause fallback)."""
+        # Use media key toggle as safe default
+        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+
+    def pause(self):
+        """Attempt to pause playback (toggle/play-pause fallback)."""
+        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+
+    def toggle_play_pause(self):
+        """Toggle playback state."""
+        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+
+    def next_track(self):
+        """Skip to next track."""
+        self._send_media_key(VK_MEDIA_NEXT_TRACK)
+
+    def previous_track(self):
+        """Skip to previous track."""
+        self._send_media_key(VK_MEDIA_PREV_TRACK)
 
     @staticmethod
     def _dominant_color(img_bytes: bytes):

@@ -78,6 +78,10 @@ class AudioCaptureThread(QThread):
             if edge_idx[i] <= edge_idx[i - 1]:
                 edge_idx[i] = min(edge_idx[i - 1] + 1, len(fft_freqs) - 1)
 
+        band_starts = edge_idx[:-1].astype(np.int32)
+        band_ends = edge_idx[1:].astype(np.int32)
+        band_lengths = np.maximum(1, band_ends - band_starts).astype(np.float32)
+
         # Slight treble compensation so low-end does not dominate the left side.
         eq_curve = np.linspace(1.0, 1.85, num_bars)
 
@@ -116,14 +120,11 @@ class AudioCaptureThread(QThread):
                                 fft_data = np.clip(fft_data, 0, None)
 
                                 # Bucket into `num_bars` using log-spaced bands.
-                                bars = np.zeros(num_bars, dtype=np.float32)
-                                for i in range(num_bars):
-                                    start = int(edge_idx[i])
-                                    end = int(edge_idx[i + 1])
-                                    if end <= start:
-                                        end = min(start + 1, len(fft_data))
-                                    band = fft_data[start:end]
-                                    bars[i] = float(np.mean(band)) if len(band) else 0.0
+                                cumulative = np.concatenate(
+                                    ([0.0], np.cumsum(fft_data, dtype=np.float64))
+                                )
+                                band_sums = cumulative[band_ends] - cumulative[band_starts]
+                                bars = (band_sums / band_lengths).astype(np.float32, copy=False)
 
                                 # Rebalance for fuller right-side presence and smooth extremes.
                                 bars *= eq_curve
