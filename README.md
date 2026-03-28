@@ -14,13 +14,14 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 - **Multiple Themes**: 5 built-in color presets + dynamic album art colors
 - **Multiple Modes**: Bars, waveform, mirror, dot matrix, and skyline (theme-aware) visualization modes
 - **Auto-Hide**: Fades out when silent, returns when sound plays
+- **Natural Pause/Silence Falloff**: Visuals ease down to baseline when playback pauses/stops
 
 ### Key Features
 
 ✅ **Persistent Click-Through + Topmost** — Visualizer never blocks taskbar clicks and stays above taskbar
 ✅ **Dynamic Coloring** — Album art colors override theme in real-time
 ✅ **Beat Detection** — Flash effect synced to bass frequencies
-✅ **Smooth Animations** — 33 FPS rendering with fast attack/slow decay
+✅ **Smooth Animations** — 33 FPS rendering with fast attack, natural decay, and silence falloff
 ✅ **Glow Effects** — Radial gradients for depth and luminosity
 ✅ **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
 ✅ **Auto-Start** — Registry integration to run with Windows
@@ -60,12 +61,16 @@ audio_visualizer/
 - **Core rendering engine** — handles painting and animations
 - Win32 APIs for transparency and click-through setup
 - Detects Start button position and adapts visualizer width
-- Implements three visualization modes:
+- Implements multiple visualization modes:
   - **Bars**: Vertical frequency bars with glow
   - **Waveform**: Smooth curve with fill under the line
   - **Mirror**: Symmetric bars growing from center line
+    - **Dot Matrix**: LED-like stacked dots with peak indicator
+    - **Skyline / Radial / Radar / Constellation**: Built-in alternate render styles
 - Auto-hide logic with opacity fading
 - Beat detection on low-frequency bins (bass)
+- Stagnant-frame and stale-audio handling so paused audio decays naturally
+- Stable level reference normalization to prevent visual freeze on pause/silence
 - Overlays for volume display and a now-playing card (initial auto-show + click trigger)
 
 #### `audio_capture.py`
@@ -134,6 +139,8 @@ FFT Processing → Qt Signal (bars array)
 Smooth + Normalize
     ↓
 [_tick()] timer (33 fps)
+    ↓
+Pause/silence detection + natural baseline decay
     ↓
 paintEvent()
     ↓
@@ -209,11 +216,13 @@ user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0)
 7. **Normalize**: Clip to [0, ∞), scale to [0, 1] for rendering
 8. **Bucket**: Average frequency bins into 64 visualization bars
 
-#### Smoothing
+#### Smoothing And Pause/Silence Decay
 
-- **Fast Attack**: `smoothed = smoothed * 0.3 + scaled * 0.7`
-- **Slow Decay**: `smoothed = smoothed * 0.8 + scaled * 0.2`
-- Creates natural visual feel with responsive peaks and gradual falls
+- **Fast Attack**: Bars respond quickly to rising energy.
+- **Controlled Decay**: Bars decay more gradually than attack for fluid motion.
+- **Pause/Silence Falloff**: When audio is silent/paused (or FFT frames become stagnant), values decay toward baseline instead of staying elevated.
+- **Stale Input Guard**: If fresh FFT frames stall, fallback decay still pulls visuals down.
+- **Stable Level Reference**: Render normalization uses a rolling reference (not only per-frame max), so all modes visibly settle to baseline during pause/silence.
 
 #### Beat Detection
 
@@ -294,10 +303,27 @@ Location: `~/.audio_visualizer.json`
   "auto_hide_timeout": 5.0,
   "glow": true,
   "beat_flash": true,
+  "silent_decay_rate": 0.965,
+  "stale_audio_decay_rate": 0.95,
+  "stagnant_delta_threshold": 0.0012,
+  "stagnant_frames_required": 14,
+  "level_ref_attack": 0.22,
+  "level_ref_decay_active": 0.995,
+  "level_ref_decay_silent": 0.94,
   "theme": "album_art",
   "startup": false
 }
 ```
+
+### Pause/Silence Tuning (Optional)
+
+- `silent_decay_rate`: How quickly visuals fall during detected silence/pause. Higher = slower fall.
+- `stale_audio_decay_rate`: Fallback decay when FFT updates become stale. Higher = slower fall.
+- `stagnant_delta_threshold`: Sensitivity for detecting nearly-identical FFT frames (pause-like input).
+- `stagnant_frames_required`: Consecutive stagnant frames before entering pause/silence falloff.
+- `level_ref_attack`: How fast display normalization rises when audio gets louder.
+- `level_ref_decay_active`: How slowly normalization decays during active playback.
+- `level_ref_decay_silent`: How quickly normalization decays during pause/silence.
 
 ### Theme Reference
 
@@ -359,25 +385,27 @@ The installer uses `assets/app_icon.ico` for setup branding and Start menu short
 
 ## Version Tags And GitHub Releases
 
-This project now supports semantic version tags in `vX.Y.Z` format (for example, `v1.0.1` or `v1.1.0`).
+This project now supports semantic version tags in `vX.Y.Z` format (for example, `v1.1.0` or `v1.2.0`).
+
+Latest release tag: `v1.2.0`.
 
 ### Option A: Create And Push A Tag Locally (PowerShell)
 
 ```powershell
-.\create_semver_tag.ps1 -Version 1.0.1
+.\create_semver_tag.ps1 -Version 1.2.0
 ```
 
 Optional custom tag message:
 
 ```powershell
-.\create_semver_tag.ps1 -Version 1.1.0 -Message "Release v1.1.0"
+.\create_semver_tag.ps1 -Version 1.2.0 -Message "Release v1.2.0"
 ```
 
 What happens:
 
 - Validates semver format.
 - Verifies the tag does not already exist.
-- Creates an annotated tag like `v1.0.1`.
+- Creates an annotated tag like `v1.2.0`.
 - Pushes the tag to `origin`.
 - Triggers automatic GitHub release publishing.
 
