@@ -22,7 +22,7 @@ RELEASES_URL = (
 )
 TAGS_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/tags"
 RELEASES_LATEST_WEB_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-INSTALLER_ASSET_REGEX = re.compile(r"^AudioVisualizer-Setup-.*\\.exe$", re.IGNORECASE)
+INSTALLER_ASSET_REGEX = re.compile(r"^AudioVisualizer-Setup-.*\.exe$", re.IGNORECASE)
 
 
 def _parse_semver(value: str) -> tuple[int, int, int]:
