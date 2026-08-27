@@ -18,15 +18,15 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 
 ### Key Features
 
-✅ **Persistent Click-Through + Topmost** — Visualizer never blocks taskbar clicks and stays above taskbar
-✅ **Dynamic Coloring** — Album art colors override theme in real-time
-✅ **Beat Detection** — Flash effect synced to bass frequencies
-✅ **Smooth Animations** — 33 FPS rendering with fast attack, natural decay, and silence falloff
-✅ **Glow Effects** — Radial gradients for depth and luminosity
-✅ **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
-✅ **Auto-Start** — Registry integration to run with Windows
-✅ **Configuration Persistence** — Settings saved to JSON
-✅ **Multiple Visualization Modes** — Bars, waveform, mirror, dot matrix, and skyline (theme-aware)
+- **Persistent Click-Through + Topmost** — Visualizer never blocks taskbar clicks and stays above taskbar
+- **Dynamic Coloring** — Album art colors override theme in real-time
+- **Beat Detection** — Flash effect synced to bass frequencies
+- **Smooth Animations** — 33 FPS rendering with fast attack, natural decay, and silence falloff
+- **Glow Effects** — Radial gradients for depth and luminosity
+- **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
+- **Auto-Start** — Registry integration to run with Windows
+- **Configuration Persistence** — Settings saved to JSON
+- **Multiple Visualization Modes** — Bars, waveform, mirror, dot matrix, and skyline (theme-aware)
 
 ## Architecture
 
