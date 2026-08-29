@@ -64,11 +64,15 @@ class MediaMonitor:
         self._prev_key = ""
         self._running = False
         self._thread = None
+        self._stop_event = threading.Event()
 
     def start(self):
         if not HAS_WINSDK:
             print("[MediaMonitor] winsdk not available — skipping.")
             return
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -76,16 +80,21 @@ class MediaMonitor:
 
     def stop(self):
         self._running = False
+        self._stop_event.set()
+        thread = self._thread
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=max(1.0, self.interval + 1.0))
+        self._thread = None
 
     # ── internal ────────────────────────────────────────────────────
 
     def _loop(self):
-        while self._running:
+        while self._running and not self._stop_event.is_set():
             try:
                 asyncio.run(self._poll_once())
             except Exception:
                 traceback.print_exc()
-            time.sleep(self.interval)
+            self._stop_event.wait(self.interval)
 
     async def _poll_once(self):
         manager = await SessionManager.request_async()

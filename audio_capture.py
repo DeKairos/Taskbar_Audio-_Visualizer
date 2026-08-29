@@ -13,9 +13,10 @@ COINIT_MULTITHREADED = 0x0
 class AudioCaptureThread(QThread):
     fft_data_ready = pyqtSignal(np.ndarray)
 
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
         self._running = True
+        self._config = config or {}
 
     def _find_loopback_device(self):
         """
@@ -24,10 +25,15 @@ class AudioCaptureThread(QThread):
         We match the current default speaker by name, and if that fails,
         we just pick the first available loopback device.
         """
+        use_mic = bool(self._config.get("use_microphone", False))
+
+        if use_mic:
+            return self._find_microphone_device()
+
         try:
             default_speaker = sc.default_speaker()
             loopback_mics = sc.all_microphones(include_loopback=True)
-            
+
             # First pass: match default speaker by name (case-insensitive partial match)
             for mic in loopback_mics:
                 if mic.isloopback and default_speaker.name.lower() in mic.name.lower():
@@ -45,6 +51,23 @@ class AudioCaptureThread(QThread):
 
         return None
 
+    def _find_microphone_device(self):
+        """Find the default microphone for direct input capture."""
+        try:
+            default_mic = sc.default_microphone()
+            if default_mic:
+                print(f"[AudioCapture] Using microphone: {default_mic.name}")
+                return default_mic
+
+            # Fallback: find any non-loopback mic
+            for mic in sc.all_microphones(include_loopback=True):
+                if not mic.isloopback:
+                    print(f"[AudioCapture] Fallback microphone: {mic.name}")
+                    return mic
+        except Exception as e:
+            print(f"[AudioCapture] Error finding microphone: {e}")
+        return None
+
     def _current_default_speaker_name(self):
         """Best-effort default speaker name lookup for device-change detection."""
         try:
@@ -58,17 +81,34 @@ class AudioCaptureThread(QThread):
         # from Windows Media Foundation (used internally by soundcard on Windows)
         ctypes.windll.ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
 
-        # Larger block size reduces buffer underruns ("data discontinuity" warnings)
-        block_size = 4096
+        # Configurable parameters
+        cfg = self._config
+        # 2048 samples cuts capture latency roughly in half while remaining
+        # inexpensive for the background capture thread.
+        block_size = int(cfg.get("fft_size", 2048))
         samplerate = 44100
-        num_bars = 64
-        window = np.hanning(block_size)
+        num_bars = int(cfg.get("bar_count", 64))
+        min_hz = float(cfg.get("freq_min", 40.0))
+        max_hz_cfg = float(cfg.get("freq_max", 16000.0))
+        max_hz = min(max_hz_cfg, samplerate * 0.48)
+        use_mic = bool(cfg.get("use_microphone", False))
+        isolate_bass = bool(cfg.get("isolate_bass", False))
+
+        # Window function: Hann (default) or Hamming
+        win_type = cfg.get("window_function", "hann")
+        if win_type == "hamming":
+            window = np.hamming(block_size)
+        elif win_type == "blackman":
+            window = np.blackman(block_size)
+        else:
+            window = np.hanning(block_size)
 
         # Perceptual frequency mapping: log-spaced buckets spread activity more
         # evenly across the visualizer width than linear FFT bin slicing.
         fft_freqs = np.fft.rfftfreq(block_size, d=1.0 / samplerate)
-        min_hz = 40.0
-        max_hz = min(16000.0, samplerate * 0.48)
+        if isolate_bass:
+            # Narrow the range to bass-only
+            max_hz = min(300.0, max_hz)
         hz_edges = np.logspace(np.log10(min_hz), np.log10(max_hz), num_bars + 1)
         edge_idx = np.searchsorted(fft_freqs, hz_edges, side="left")
         edge_idx = np.clip(edge_idx, 0, len(fft_freqs) - 1)
@@ -130,6 +170,11 @@ class AudioCaptureThread(QThread):
                                 bars *= eq_curve
                                 bars = np.power(np.maximum(bars, 0.0), 0.96)
 
+                                # Band isolation: zero out non-bass bars if enabled
+                                if isolate_bass:
+                                    bass_cutoff = max(1, num_bars // 3)
+                                    bars[bass_cutoff:] = 0.0
+
                                 self.fft_data_ready.emit(bars)
 
                             # If Windows default output changed, re-open on the new loopback.
@@ -155,4 +200,8 @@ class AudioCaptureThread(QThread):
     def stop(self):
         self._running = False
         self.wait()
+
+    def update_config(self, config):
+        """Update audio capture config. Some changes require restart."""
+        self._config = config or {}
 

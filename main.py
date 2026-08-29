@@ -76,7 +76,7 @@ def main():
 
     visualizer = VisualizerWindow(config)
 
-    audio_thread = AudioCaptureThread()
+    audio_thread = AudioCaptureThread(config)
     audio_thread.fft_data_ready.connect(visualizer.update_fft)
     audio_thread.start()
 
@@ -93,6 +93,7 @@ def main():
 
     tray = TrayManager(visualizer, audio_thread, config, app.windowIcon())
     tray.show()
+    app.aboutToQuit.connect(tray.shutdown)
 
     # Position on taskbar after event loop starts
     QTimer.singleShot(300, visualizer.position_on_taskbar)

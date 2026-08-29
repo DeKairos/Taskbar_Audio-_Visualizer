@@ -1,7 +1,6 @@
 """
 tray_manager.py — System tray icon with controls for the visualizer.
 """
-import sys
 import os
 import time
 import subprocess
@@ -10,10 +9,11 @@ import urllib.request
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox, QApplication, QProgressDialog
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction
 from PyQt6.QtCore import QTimer, Qt
-from config_manager import save_config, set_startup
+from config_manager import save_config, set_startup, audio_config_changed
 from color_themes import THEME_NAMES, THEME_DISPLAY
 from update_checker import check_for_updates
 from app_resources import get_app_icon
+from audio_capture import AudioCaptureThread
 
 
 class TrayManager(QSystemTrayIcon):
@@ -39,6 +39,7 @@ class TrayManager(QSystemTrayIcon):
         self.vis = visualizer_window
         self.audio_thread = audio_thread
         self.cfg = config
+        self._shutting_down = False
 
         self.setToolTip("Audio Visualizer")
         self._build_menu()
@@ -47,156 +48,20 @@ class TrayManager(QSystemTrayIcon):
     def _build_menu(self):
         menu = QMenu()
 
-        # ─── Toggle Show/Hide ───
+        # ─── Settings Window ───
+        settings_action = QAction("\u2699 Settings...", menu)
+        settings_action.triggered.connect(self._open_settings)
+        menu.addAction(settings_action)
         self.toggle_action = QAction("Hide Visualizer", menu)
         self.toggle_action.triggered.connect(self._toggle_vis)
         menu.addAction(self.toggle_action)
-        menu.addSeparator()
 
-        # ─── Mode ───
-        mode_menu = menu.addMenu("Mode")
-        # Try to build mode menu from the modes registry. If it's unavailable,
-        # fall back to the legacy hard-coded entries.
-        self._mode_actions = {}
-        try:
-            from modes import list_modes
-            modes_list = list_modes()
-        except Exception:
-            modes_list = None
-
-        if modes_list:
-            for m in modes_list:
-                mode_id = m.get("id")
-                label = m.get("label", mode_id)
-                action = QAction(f"○ {label}", mode_menu)
-                action.setData((mode_id, label))
-                action.triggered.connect(lambda checked, mid=mode_id: self._set_mode(mid))
-                mode_menu.addAction(action)
-                self._mode_actions[mode_id] = action
-            self._update_mode_labels()
-        else:
-            # Legacy static menu (kept for compatibility if registry unavailable)
-            self.bars_action = QAction("○ Bars", mode_menu)
-            self.wave_action = QAction("○ Wave", mode_menu)
-            self.mirror_action = QAction("○ Mirror", mode_menu)
-            self.dot_matrix_action = QAction("○ Dot Matrix", mode_menu)
-            self.skyline_action = QAction("○ Skyline", mode_menu)
-            self.bars_action.triggered.connect(lambda: self._set_mode("bars"))
-            self.wave_action.triggered.connect(lambda: self._set_mode("wave"))
-            self.mirror_action.triggered.connect(lambda: self._set_mode("mirror"))
-            self.dot_matrix_action.triggered.connect(lambda: self._set_mode("dot_matrix"))
-            self.skyline_action.triggered.connect(lambda: self._set_mode("skyline"))
-            mode_menu.addAction(self.bars_action)
-            mode_menu.addAction(self.wave_action)
-            mode_menu.addAction(self.mirror_action)
-            mode_menu.addAction(self.dot_matrix_action)
-            mode_menu.addAction(self.skyline_action)
-            self._update_mode_labels()
-
-        # ─── Sensitivity ───
-        sens_menu = menu.addMenu("Sensitivity")
-        for label, val in [("Low", 0.5), ("Medium", 1.0), ("High", 2.0)]:
-            prefix = "◉" if self.cfg.get("sensitivity", 1.0) == val else "○"
-            action = QAction(f"{prefix} {label}", sens_menu)
-            action.triggered.connect(lambda checked, v=val: self._set_sensitivity(v))
-            sens_menu.addAction(action)
-
-        # ─── Theme ───
-        theme_menu = menu.addMenu("Theme")
-        current_theme = self.cfg.get("theme", "cyan")
-        for theme_id in THEME_NAMES:
-            display_name = THEME_DISPLAY.get(theme_id, theme_id)
-            prefix = "◉" if current_theme == theme_id else "○"
-            action = QAction(f"{prefix} {display_name}", theme_menu)
-            action.triggered.connect(lambda checked, t=theme_id: self._set_theme(t))
-            theme_menu.addAction(action)
-
-        # ─── Gradient ───
-        gradient_menu = menu.addMenu("Gradient")
-        current_gradient = self.cfg.get("gradient_mode", "off")
-        for label, mode in [
-            ("Off", "off"),
-            ("2-Color", "two_color"),
-            ("3-Color", "three_color"),
-        ]:
-            prefix = "◉" if current_gradient == mode else "○"
-            action = QAction(f"{prefix} {label}", gradient_menu)
-            action.triggered.connect(lambda checked, m=mode: self._set_gradient_mode(m))
-            gradient_menu.addAction(action)
-
-        # ─── Mirror Center ───
-        mirror_menu = menu.addMenu("Mirror Center")
-        center_enabled = bool(self.cfg.get("mirror_center_mode", False))
-        center_toggle = QAction(
-            "✓ Enable Center Gap" if center_enabled else "  Enable Center Gap",
-            mirror_menu,
-        )
-        center_toggle.triggered.connect(self._toggle_mirror_center_mode)
-        mirror_menu.addAction(center_toggle)
-
-        gap_menu = mirror_menu.addMenu("Center Gap")
-        current_gap = int(self.cfg.get("mirror_center_gap", 2) or 2)
-        for gap_val in [0, 2, 4, 6, 8, 10]:
-            prefix = "◉" if current_gap == gap_val else "○"
-            action = QAction(f"{prefix} {gap_val}px", gap_menu)
-            action.triggered.connect(lambda checked, g=gap_val: self._set_mirror_center_gap(g))
-            gap_menu.addAction(action)
-
-        menu.addSeparator()
-
-        # ─── Toggles ───
-        self.glow_action = QAction(
-            "✓ Glow Effect" if self.cfg.get("glow", True) else "  Glow Effect", menu
-        )
-        self.glow_action.triggered.connect(self._toggle_glow)
-        menu.addAction(self.glow_action)
-
-        self.beat_action = QAction(
-            "✓ Beat Pulse" if self.cfg.get("beat_flash", True) else "  Beat Pulse", menu
-        )
-        self.beat_action.triggered.connect(self._toggle_beat)
-        menu.addAction(self.beat_action)
-
-        self.autohide_action = QAction(
-            "✓ Auto-Hide" if self.cfg.get("auto_hide", True) else "  Auto-Hide", menu
-        )
-        self.autohide_action.triggered.connect(self._toggle_autohide)
-        menu.addAction(self.autohide_action)
-
-        self.dynamic_quality_action = QAction(
-            "✓ Dynamic Quality" if self.cfg.get("dynamic_quality", True) else "  Dynamic Quality",
-            menu,
-        )
-        self.dynamic_quality_action.triggered.connect(self._toggle_dynamic_quality)
-        menu.addAction(self.dynamic_quality_action)
-
-        self.peak_caps_action = QAction(
-            "✓ Peak Caps" if self.cfg.get("peak_caps_enabled", True) else "  Peak Caps",
-            menu,
-        )
-        self.peak_caps_action.triggered.connect(self._toggle_peak_caps)
-        menu.addAction(self.peak_caps_action)
-
-        menu.addSeparator()
-
-        # ─── Startup ───
-        self.startup_action = QAction(
-            "✓ Start with Windows" if self.cfg.get("startup", False)
-            else "  Start with Windows", menu
-        )
-        self.startup_action.triggered.connect(self._toggle_startup)
-        menu.addAction(self.startup_action)
-
-        menu.addSeparator()
-
-        # ─── Updates ───
         self.check_updates_action = QAction("Check for updates", menu)
         self.check_updates_action.triggered.connect(self._check_for_updates)
         menu.addAction(self.check_updates_action)
 
         menu.addSeparator()
 
-        # ─── Quit ───
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
@@ -215,6 +80,43 @@ class TrayManager(QSystemTrayIcon):
             self.vis._opacity = 1.0
             self.vis.show()
         self._save()
+
+    def _open_settings(self):
+        """Open the Fluent Settings window."""
+        try:
+            from ui.settings_window import SettingsWindow
+            if not hasattr(self, "_settings_win") or self._settings_win is None:
+                self._settings_win = SettingsWindow(self.cfg)
+                self._settings_win.config_changed.connect(self._on_settings_changed)
+            self._settings_win.show()
+            self._settings_win.raise_()
+            self._settings_win.activateWindow()
+        except Exception as e:
+            print(f"[Tray] Failed to open settings: {e}")
+
+    def _on_settings_changed(self, cfg: dict):
+        """Called when settings window changes config."""
+        previous_cfg = self.cfg
+        self.cfg = cfg
+        self.vis.apply_config(self.cfg)
+        if audio_config_changed(previous_cfg, cfg):
+            self._restart_audio_capture()
+        self._save()
+        # Rebuild tray menu to reflect changes
+        self._build_menu()
+
+    def _restart_audio_capture(self):
+        """Restart capture so settings that affect FFT input take effect."""
+        old_thread = self.audio_thread
+        try:
+            old_thread.stop()
+        except Exception as exc:
+            print(f"[Tray] Failed to stop audio capture: {exc}")
+
+        new_thread = AudioCaptureThread(self.cfg)
+        new_thread.fft_data_ready.connect(self.vis.update_fft)
+        new_thread.start()
+        self.audio_thread = new_thread
 
     def _set_mode(self, mode: str):
         self.cfg["mode"] = mode
@@ -242,8 +144,6 @@ class TrayManager(QSystemTrayIcon):
         self.wave_action.setText("◉ Wave" if cur == "wave" else "○ Wave")
         self.mirror_action.setText("◉ Mirror" if cur == "mirror" else "○ Mirror")
         self.dot_matrix_action.setText("◉ Dot Matrix" if cur == "dot_matrix" else "○ Dot Matrix")
-        self.skyline_action.setText("◉ Skyline" if cur == "skyline" else "○ Skyline")
-        # Radar/rotating modes removed; legacy configs mapping still handled elsewhere.
 
     def _set_sensitivity(self, val: float):
         self.cfg["sensitivity"] = val
@@ -585,13 +485,22 @@ class TrayManager(QSystemTrayIcon):
         )
 
     def _quit(self):
+        self.shutdown()
+        QApplication.quit()
+
+    def shutdown(self):
+        """Stop application workers exactly once before the event loop exits."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
         self.vis.timer.stop()
-        self.audio_thread.stop()
+        if self.audio_thread:
+            self.audio_thread.stop()
         if self.vis.volume_scroller:
             self.vis.volume_scroller.stop()
         if self.vis.media_click_watcher:
             self.vis.media_click_watcher.stop()
         if self.vis.media_monitor:
             self.vis.media_monitor.stop()
+        self.hide()
         self.vis.close()
-        sys.exit()
