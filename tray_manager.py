@@ -56,7 +56,7 @@ class TrayManager(QSystemTrayIcon):
         self.toggle_action.triggered.connect(self._toggle_vis)
         menu.addAction(self.toggle_action)
 
-self.check_updates_action = QAction("Check for updates", menu)
+        self.check_updates_action = QAction("Check for updates", menu)
         self.check_updates_action.triggered.connect(self._check_for_updates)
         menu.addAction(self.check_updates_action)
 

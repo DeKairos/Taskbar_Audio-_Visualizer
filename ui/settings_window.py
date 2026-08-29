@@ -260,6 +260,49 @@ class _GeneralPage(QWidget):
         ))
         self.update_cb.toggled.connect(self._on_change)
 
+        layout.addWidget(_SectionHeader("Taskbar"))
+
+        # Visualizer height
+        self.height_slider = _make_slider(20, 80, cfg.get("visualizer_height", 40))
+        layout.addWidget(_SettingRow(
+            "Visualizer Height (px)", self.height_slider,
+            "Height of the visualizer strip in pixels."
+        ))
+        self.height_slider.valueChanged.connect(self._on_change)
+
+        # Taskbar auto-hide behavior
+        self.taskbar_behavior_combo = _make_combo(
+            ["Follow taskbar", "Hide when hidden", "Always show"],
+            {"follow": "Follow taskbar", "hide": "Hide when hidden", "always": "Always show"}.get(
+                cfg.get("taskbar_auto_hide_behavior", "follow"), "Follow taskbar"
+            )
+        )
+        layout.addWidget(_SettingRow(
+            "When Taskbar Auto-Hides", self.taskbar_behavior_combo,
+            "Choose how the visualizer behaves when the taskbar is auto-hidden."
+        ))
+        self.taskbar_behavior_combo.currentIndexChanged.connect(self._on_change)
+
+        # Monitor selector
+        monitor_items = ["Primary Monitor"]
+        try:
+            from ui.monitor_manager import MonitorManager
+            mm = MonitorManager()
+            monitors = mm.get_monitors()
+            if len(monitors) > 1:
+                monitor_items = [f"Monitor {i+1}" for i in range(len(monitors))]
+        except Exception:
+            pass
+
+        current_monitor = cfg.get("visualizer_monitor", 0)
+        current_monitor_text = monitor_items[0] if current_monitor == 0 else f"Monitor {current_monitor+1}" if current_monitor < len(monitor_items) else monitor_items[0]
+        self.monitor_combo = _make_combo(monitor_items, current_monitor_text)
+        layout.addWidget(_SettingRow(
+            "Display Monitor", self.monitor_combo,
+            "Which monitor to show the visualizer on."
+        ))
+        self.monitor_combo.currentIndexChanged.connect(self._on_change)
+
         layout.addStretch()
 
     def _on_change(self, *args):
@@ -268,6 +311,11 @@ class _GeneralPage(QWidget):
         self.cfg["startup"] = self.startup_cb.isChecked()
         self.cfg["dynamic_quality"] = self.dynamic_q_cb.isChecked()
         self.cfg["auto_update_check"] = self.update_cb.isChecked()
+        self.cfg["visualizer_height"] = self.height_slider.value()
+        behavior_map = {"Follow taskbar": "follow", "Hide when hidden": "hide", "Always show": "always"}
+        self.cfg["taskbar_auto_hide_behavior"] = behavior_map.get(self.taskbar_behavior_combo.currentText(), "follow")
+        monitor_idx = self.monitor_combo.currentIndex()
+        self.cfg["visualizer_monitor"] = monitor_idx
         self.config_changed.emit(self.cfg)
 
 

@@ -278,6 +278,32 @@ class VisualizerWindow(QWidget):
         vis_height = self.cfg.get("visualizer_height", 40)
 
         try:
+            taskbar_info = self._monitor_mgr.get_taskbar_info(monitor_index)
+            is_autohidden = taskbar_info.get("autohide", False)
+            behavior = self.cfg.get("taskbar_auto_hide_behavior", "follow")
+
+            if is_autohidden and behavior == "hide":
+                if self.isVisible():
+                    self.hide()
+                return
+            elif is_autohidden and behavior == "follow":
+                if not self.isVisible():
+                    self.show()
+                vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
+                    monitor_index=monitor_index,
+                    width_percent=width_percent,
+                    vis_height=vis_height
+                )
+                if abs(vis_w - self._last_vis_w) > 10 or abs(vis_x - self.x()) > 5 or abs(vis_y - self.y()) > 5:
+                    self.position_on_taskbar()
+                return
+            elif behavior == "always":
+                if not self.isVisible():
+                    self.show()
+        except Exception:
+            pass
+
+        try:
             vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
                 monitor_index=monitor_index,
                 width_percent=width_percent,
