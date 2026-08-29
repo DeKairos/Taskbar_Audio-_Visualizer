@@ -285,11 +285,22 @@ class MonitorManager:
 
     def visualizer_position(self, monitor_index: int = 0,
                             width_percent: int = 40,
-                            vis_height: int = 40) -> tuple:
+                            vis_height: int = 40,
+                            width_mode: str = "auto",
+                            alignment_hint: str = "left") -> tuple:
         """
         Calculate visualizer position on the given monitor.
         Returns (x, y, width, height).
-        Uses empty space detection when available.
+
+        width_mode:
+            "auto" - use empty space detection (default)
+            "percentage" - use width_percent of taskbar width
+            "fixed" - use width_percent as fixed pixels
+
+        alignment_hint:
+            "left" - position at left edge of taskbar (default)
+            "center" - position at center of taskbar
+            "right" - position at right edge of taskbar
         """
         info = self.get_taskbar_info(monitor_index)
         if not info:
@@ -297,32 +308,77 @@ class MonitorManager:
 
         taskbar = info["rect"]
         edge = info["edge"]
-        autohide = info["autohide"]
 
         empty_space = self.get_taskbar_empty_space(monitor_index)
 
         if edge == ABE_BOTTOM:
-            vis_w = empty_space["width"] if empty_space["available"] else int(taskbar.width() * width_percent / 100)
-            vis_x = empty_space["x"] if empty_space["available"] else taskbar.x()
+            if width_mode == "auto" and empty_space["available"]:
+                vis_w = empty_space["width"]
+                vis_x = empty_space["x"]
+            elif width_mode == "fixed":
+                vis_w = width_percent
+                vis_x = self._get_alignment_x(taskbar, vis_w, alignment_hint)
+            else:
+                vis_w = int(taskbar.width() * width_percent / 100)
+                vis_x = self._get_alignment_x(taskbar, vis_w, alignment_hint)
             vis_y = taskbar.y() + (taskbar.height() - vis_height) // 2
             return (vis_x, vis_y, max(100, vis_w), vis_height)
 
         elif edge == ABE_TOP:
-            vis_w = empty_space["width"] if empty_space["available"] else int(taskbar.width() * width_percent / 100)
-            vis_x = empty_space["x"] if empty_space["available"] else taskbar.x()
+            if width_mode == "auto" and empty_space["available"]:
+                vis_w = empty_space["width"]
+                vis_x = empty_space["x"]
+            elif width_mode == "fixed":
+                vis_w = width_percent
+                vis_x = self._get_alignment_x(taskbar, vis_w, alignment_hint)
+            else:
+                vis_w = int(taskbar.width() * width_percent / 100)
+                vis_x = self._get_alignment_x(taskbar, vis_w, alignment_hint)
             vis_y = taskbar.y() + (taskbar.height() - vis_height) // 2
             return (vis_x, vis_y, max(100, vis_w), vis_height)
 
         elif edge == ABE_LEFT:
-            vis_h = empty_space["width"] if empty_space["available"] else vis_height
-            vis_y = empty_space["x"] if empty_space["available"] else taskbar.y()
+            if width_mode == "auto" and empty_space["available"]:
+                vis_h = empty_space["width"]
+                vis_y = empty_space["x"]
+            elif width_mode == "fixed":
+                vis_h = width_percent
+                vis_y = self._get_alignment_x_vertical(taskbar, vis_h, alignment_hint)
+            else:
+                vis_h = vis_height
+                vis_y = self._get_alignment_x_vertical(taskbar, vis_h, alignment_hint)
             vis_x = taskbar.x() + (taskbar.width() - vis_height) // 2
             return (vis_x, vis_y, vis_height, max(100, vis_h))
 
         elif edge == ABE_RIGHT:
-            vis_h = empty_space["width"] if empty_space["available"] else vis_height
-            vis_y = empty_space["x"] if empty_space["available"] else taskbar.y()
+            if width_mode == "auto" and empty_space["available"]:
+                vis_h = empty_space["width"]
+                vis_y = empty_space["x"]
+            elif width_mode == "fixed":
+                vis_h = width_percent
+                vis_y = self._get_alignment_x_vertical(taskbar, vis_h, alignment_hint)
+            else:
+                vis_h = vis_height
+                vis_y = self._get_alignment_x_vertical(taskbar, vis_h, alignment_hint)
             vis_x = taskbar.x() + (taskbar.width() - vis_height) // 2
             return (vis_x, vis_y, vis_height, max(100, vis_h))
 
         return (taskbar.x(), taskbar.y(), taskbar.width(), vis_height)
+
+    def _get_alignment_x(self, taskbar: QRect, vis_w: int, alignment: str) -> int:
+        """Get x position based on alignment hint for horizontal taskbar."""
+        if alignment == "left":
+            return taskbar.x()
+        elif alignment == "right":
+            return taskbar.right() - vis_w
+        else:  # center
+            return taskbar.x() + (taskbar.width() - vis_w) // 2
+
+    def _get_alignment_x_vertical(self, taskbar: QRect, vis_h: int, alignment: str) -> int:
+        """Get y position based on alignment hint for vertical taskbar."""
+        if alignment == "left":
+            return taskbar.top()
+        elif alignment == "right":
+            return taskbar.bottom() - vis_h
+        else:  # center
+            return taskbar.top() + (taskbar.height() - vis_h) // 2

@@ -369,6 +369,26 @@ class _VisualizerPage(QWidget):
         ))
         self.width_slider.valueChanged.connect(self._on_change)
 
+        # Width Mode
+        width_mode = cfg.get("width_mode", "auto")
+        width_mode_text = {"auto": "Auto (empty space)", "percentage": "Percentage", "fixed": "Fixed pixels"}.get(width_mode, "Auto (empty space)")
+        self.width_mode_combo = _make_combo(["Auto (empty space)", "Percentage", "Fixed pixels"], width_mode_text)
+        layout.addWidget(_SettingRow(
+            "Width Mode", self.width_mode_combo,
+            "Auto: detect empty space. Percentage: % of taskbar. Fixed: exact pixels."
+        ))
+        self.width_mode_combo.currentIndexChanged.connect(self._on_change)
+
+        # Alignment Hint
+        alignment_hint = cfg.get("alignment_hint", "left")
+        alignment_text = {"left": "Left", "center": "Center", "right": "Right"}.get(alignment_hint, "Left")
+        self.alignment_combo = _make_combo(["Left", "Center", "Right"], alignment_text)
+        layout.addWidget(_SettingRow(
+            "Alignment", self.alignment_combo,
+            "Position of the visualizer within the taskbar area."
+        ))
+        self.alignment_combo.currentIndexChanged.connect(self._on_change)
+
         # Sensitivity
         self.sens_combo = _make_combo(["Low", "Medium", "High"],
             {0.5: "Low", 1.0: "Medium", 2.0: "High"}.get(cfg.get("sensitivity", 1.0), "Medium"))
@@ -398,6 +418,10 @@ class _VisualizerPage(QWidget):
     def _on_change(self, *args):
         self.cfg["bar_count"] = self.bar_count_slider.value()
         self.cfg["width_percent"] = self.width_slider.value()
+        width_mode_map = {"Auto (empty space)": "auto", "Percentage": "percentage", "Fixed pixels": "fixed"}
+        self.cfg["width_mode"] = width_mode_map.get(self.width_mode_combo.currentText(), "auto")
+        alignment_map = {"Left": "left", "Center": "center", "Right": "right"}
+        self.cfg["alignment_hint"] = alignment_map.get(self.alignment_combo.currentText(), "left")
         sens_map = {"Low": 0.5, "Medium": 1.0, "High": 2.0}
         self.cfg["sensitivity"] = sens_map.get(self.sens_combo.currentText(), 1.0)
         self.cfg["glow"] = self.glow_cb.isChecked()

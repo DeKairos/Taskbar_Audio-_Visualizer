@@ -248,12 +248,16 @@ class VisualizerWindow(QWidget):
         monitor_index = self.cfg.get("visualizer_monitor", 0)
         width_percent = self.cfg.get("width_percent", 40)
         vis_height = self.cfg.get("visualizer_height", 40)
+        width_mode = self.cfg.get("width_mode", "auto")
+        alignment_hint = self.cfg.get("alignment_hint", "left")
 
         try:
             vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
                 monitor_index=monitor_index,
                 width_percent=width_percent,
-                vis_height=vis_height
+                vis_height=vis_height,
+                width_mode=width_mode,
+                alignment_hint=alignment_hint
             )
         except Exception as e:
             print(f"[Visualizer] Positioning failed: {e}, using fallback")
@@ -269,13 +273,15 @@ class VisualizerWindow(QWidget):
         self._last_vis_w = vis_w
         info = self._monitor_mgr.get_taskbar_info(monitor_index)
         edge_name = {0: "LEFT", 1: "TOP", 2: "RIGHT", 3: "BOTTOM"}.get(info.get("edge", 3), "BOTTOM")
-        print(f"[Visualizer] Taskbar overlay: ({vis_x},{vis_y}) {vis_w}x{vis_h}  edge={edge_name} monitor={monitor_index}")
+        print(f"[Visualizer] Taskbar overlay: ({vis_x},{vis_y}) {vis_w}x{vis_h}  edge={edge_name} mode={width_mode} align={alignment_hint} monitor={monitor_index}")
 
     def _maybe_reposition(self):
         """Re-check taskbar position and resize if it changed."""
         monitor_index = self.cfg.get("visualizer_monitor", 0)
         width_percent = self.cfg.get("width_percent", 40)
         vis_height = self.cfg.get("visualizer_height", 40)
+        width_mode = self.cfg.get("width_mode", "auto")
+        alignment_hint = self.cfg.get("alignment_hint", "left")
 
         try:
             taskbar_info = self._monitor_mgr.get_taskbar_info(monitor_index)
@@ -292,7 +298,9 @@ class VisualizerWindow(QWidget):
                 vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
                     monitor_index=monitor_index,
                     width_percent=width_percent,
-                    vis_height=vis_height
+                    vis_height=vis_height,
+                    width_mode=width_mode,
+                    alignment_hint=alignment_hint
                 )
                 if abs(vis_w - self._last_vis_w) > 10 or abs(vis_x - self.x()) > 5 or abs(vis_y - self.y()) > 5:
                     self.position_on_taskbar()
@@ -307,7 +315,9 @@ class VisualizerWindow(QWidget):
             vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
                 monitor_index=monitor_index,
                 width_percent=width_percent,
-                vis_height=vis_height
+                vis_height=vis_height,
+                width_mode=width_mode,
+                alignment_hint=alignment_hint
             )
         except Exception:
             return
