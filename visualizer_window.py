@@ -17,6 +17,7 @@ from PyQt6.QtGui import (
     QCursor,
 )
 from color_themes import get_theme, bar_color
+from ui.monitor_manager import MonitorManager
 
 # Win32 constants for click-through
 GWL_EXSTYLE = -20
@@ -64,6 +65,8 @@ class VisualizerWindow(QWidget):
         self._quality_level = "high"
         self._frame_ms_avg = 0.0
         self._glow_quality_scale = 1.0
+        self._theme_cache_key = None
+        self._theme_cache = None
 
         # Beat-driven visual motion state
         self._bass_history = []
@@ -101,6 +104,7 @@ class VisualizerWindow(QWidget):
         # Runtime keep-alive counter for z-order/style refresh cadence.
         self._style_refresh_counter = 0
         self._last_fft_update_time = time.time()
+        self._last_tick_time = time.monotonic()
 
         # External modules (set by main.py)
         self.volume_scroller = None
@@ -131,10 +135,11 @@ class VisualizerWindow(QWidget):
         except Exception:
             self._mode_getter = None
 
-        # Repaint timer (~33 fps)
+        # Keep animation smooth between FFT updates. The timer is lightweight;
+        # expensive effects are reduced by the dynamic quality controller.
         self.timer = QTimer()
         self.timer.timeout.connect(self._tick)
-        self.timer.start(30)
+        self.timer.start(16)
 
         # Periodic reposition timer — adapts if Start button moves
         self._reposition_timer = QTimer()
@@ -152,6 +157,8 @@ class VisualizerWindow(QWidget):
         self._click_poll_timer = QTimer()
         self._click_poll_timer.timeout.connect(self._poll_media_overlay_click)
         self._click_poll_timer.start(40)
+
+        self._monitor_mgr = MonitorManager()
 
         # Media control widgets (optional; created lazily based on config)
         self._media_buttons = {}
@@ -237,76 +244,58 @@ class VisualizerWindow(QWidget):
     # ====================== POSITIONING ==============================
 
     def position_on_taskbar(self):
-        """Position to the LEFT of the Windows Start button (DPI-correct)."""
-        screen = QApplication.primaryScreen()
-        full = screen.geometry()
-        avail = screen.availableGeometry()
-        dpi_ratio = screen.devicePixelRatio()
+        """Position visualizer using MonitorManager taskbar detection."""
+        monitor_index = self.cfg.get("visualizer_monitor", 0)
+        width_percent = self.cfg.get("width_percent", 40)
+        vis_height = self.cfg.get("visualizer_height", 40)
 
-        taskbar_y = avail.y() + avail.height()
-        taskbar_h = full.height() - avail.height()
-        screen_w = full.width()
+        try:
+            vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
+                monitor_index=monitor_index,
+                width_percent=width_percent,
+                vis_height=vis_height
+            )
+        except Exception as e:
+            print(f"[Visualizer] Positioning failed: {e}, using fallback")
+            vis_x, vis_y, vis_w, vis_h = 0, 0, 800, vis_height
 
-        # Try to detect the Start button position
-        vis_w = self._detect_start_button_x(dpi_ratio)
-        source = "Start button"
-
-        if vis_w is None or vis_w < 50:
-            # Fallback to percentage-based width
-            width_pct = self.cfg.get("width_percent", 40) / 100.0
-            vis_w = int(screen_w * width_pct)
-            source = f"{int(width_pct*100)}% fallback"
-
-        # Small padding so bars don't touch the Start button
-        vis_w = max(100, vis_w - 8)
-
-        self.setGeometry(0, taskbar_y, vis_w, taskbar_h)
+        self.setGeometry(vis_x, vis_y, vis_w, vis_h)
         self.show()
         self.raise_()
 
-        # Enable click-through via Win32
         self._ensure_topmost(force_bounce=True)
         self._enable_click_through()
 
         self._last_vis_w = vis_w
-        print(f"[Visualizer] Taskbar overlay: (0,{taskbar_y}) "
-              f"{vis_w}x{taskbar_h}  ({source})")
+        info = self._monitor_mgr.get_taskbar_info(monitor_index)
+        edge_name = {0: "LEFT", 1: "TOP", 2: "RIGHT", 3: "BOTTOM"}.get(info.get("edge", 3), "BOTTOM")
+        print(f"[Visualizer] Taskbar overlay: ({vis_x},{vis_y}) {vis_w}x{vis_h}  edge={edge_name} monitor={monitor_index}")
 
     def _maybe_reposition(self):
-        """Re-check Start button position and resize if it changed."""
-        screen = QApplication.primaryScreen()
-        if screen is None:
+        """Re-check taskbar position and resize if it changed."""
+        monitor_index = self.cfg.get("visualizer_monitor", 0)
+        width_percent = self.cfg.get("width_percent", 40)
+        vis_height = self.cfg.get("visualizer_height", 40)
+
+        try:
+            vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
+                monitor_index=monitor_index,
+                width_percent=width_percent,
+                vis_height=vis_height
+            )
+        except Exception:
             return
-        dpi_ratio = screen.devicePixelRatio()
-        new_w = self._detect_start_button_x(dpi_ratio)
-        if new_w and new_w > 50:
-            new_w = max(100, new_w - 8)
-            if abs(new_w - self._last_vis_w) > 10:
-                self.position_on_taskbar()
+
+        if abs(vis_w - self._last_vis_w) > 10 or abs(vis_x - self.x()) > 5 or abs(vis_y - self.y()) > 5:
+            self.position_on_taskbar()
 
     def _detect_start_button_x(self, dpi_ratio: float):
-        """Find the Start button's left edge (logical pixels).
-        Returns None if detection fails."""
-        try:
-            taskbar_hwnd = user32.FindWindowW("Shell_TrayWnd", None)
-            if not taskbar_hwnd:
-                return None
-
-            start_hwnd = user32.FindWindowExW(taskbar_hwnd, None, "Start", None)
-            if not start_hwnd:
-                return None
-
-            rc = ctypes.wintypes.RECT()
-            user32.GetWindowRect(start_hwnd, ctypes.byref(rc))
-
-            # Convert physical pixels → logical pixels
-            logical_x = int(rc.left / dpi_ratio)
-            print(f"[Visualizer] Start button at physical x={rc.left}, "
-                  f"logical x={logical_x}")
-            return logical_x
-        except Exception as e:
-            print(f"[Visualizer] Start button detection failed: {e}")
-            return None
+        """Legacy method kept for compatibility - delegates to MonitorManager."""
+        info = self._monitor_mgr.get_taskbar_info(0)
+        empty_space = self._monitor_mgr.get_taskbar_empty_space(0)
+        if empty_space["available"]:
+            return empty_space["x"] + empty_space["width"]
+        return None
 
     def _enable_click_through(self):
         """Set WS_EX_TRANSPARENT + WS_EX_LAYERED so clicks pass through."""
@@ -664,6 +653,10 @@ class VisualizerWindow(QWidget):
     # ====================== TICK / AUTO-HIDE =========================
 
     def _tick(self):
+        now = time.monotonic()
+        dt = min(0.1, max(0.001, now - self._last_tick_time))
+        self._last_tick_time = now
+
         if not self.cfg.get("enabled", True):
             if self._opacity > 0:
                 self._opacity = max(0, self._opacity - 0.1)
@@ -690,8 +683,8 @@ class VisualizerWindow(QWidget):
 
         # Decay beat pulse and animate the moving background.
         if self._bg_pulse > 0:
-            self._bg_pulse = max(0, self._bg_pulse - self._bg_decay)
-        self._bg_phase = (self._bg_phase + 0.018) % 1.0
+            self._bg_pulse = max(0, self._bg_pulse - self._bg_decay * (dt / 0.03))
+        self._bg_phase = (self._bg_phase + 0.018 * (dt / 0.03)) % 1.0
 
         # Adapt rendering quality only when dynamic quality is enabled.
         if self.cfg.get("dynamic_quality", True):
@@ -711,7 +704,7 @@ class VisualizerWindow(QWidget):
 
         self._decay_when_stale_audio()
 
-        self._update_particles()
+        self._update_particles(dt)
 
         # Update media overlay visibility/alpha.
         self._update_media_overlay_state()
@@ -858,19 +851,24 @@ class VisualizerWindow(QWidget):
     def _resolve_theme(self) -> dict:
         """Return the active color theme, applying album-art color only in dynamic mode."""
         theme_name = self.cfg.get("theme", "cyan")
-        theme = dict(get_theme(theme_name))
-
         use_album_art = theme_name == "album_art"
         accent_rgb = (
             self.media_monitor.info.accent_rgb
             if self.media_monitor and self.media_monitor.info.accent_rgb
             else None
         )
+        cache_key = (theme_name, accent_rgb)
+        if cache_key == self._theme_cache_key and self._theme_cache is not None:
+            return self._theme_cache
+
+        theme = dict(get_theme(theme_name))
         if use_album_art and accent_rgb:
             theme["base"] = accent_rgb
             theme["peak"] = tuple(min(c + 100, 255) for c in accent_rgb)
             theme["glow"] = tuple(min(c + 50, 255) for c in accent_rgb)
 
+        self._theme_cache_key = cache_key
+        self._theme_cache = theme
         return theme
 
     def _startup_progress(self) -> float:
@@ -917,7 +915,7 @@ class VisualizerWindow(QWidget):
         right_gain = 0.88 + (0.52 * high_norm)
         return left_gain, right_gain
 
-    def _update_particles(self):
+    def _update_particles(self, dt=0.016):
         """Update lightweight ambient particles used as subtle visual texture."""
         if not self.cfg.get("glow", True):
             self._particles.clear()
@@ -964,9 +962,10 @@ class VisualizerWindow(QWidget):
         alive = []
         width = float(max(1, self.width()))
         for pt in self._particles:
-            pt["x"] += pt["vx"]
-            pt["y"] += pt["vy"]
-            pt["life"] -= 0.016
+            frame_scale = dt / 0.016
+            pt["x"] += pt["vx"] * frame_scale
+            pt["y"] += pt["vy"] * frame_scale
+            pt["life"] -= 0.016 * frame_scale
 
             if pt["x"] < -6.0:
                 pt["x"] = width + 2.0
@@ -1257,7 +1256,7 @@ class VisualizerWindow(QWidget):
             r, g, b = bar_color(theme, norm, i, num)
 
             # ---- Glow effect (drawn first, behind the bar) ----
-            if self.cfg.get("glow", True) and norm > 0.1:
+            if self.cfg.get("glow", True) and self._quality_level != "low" and norm > 0.1:
                 glow_r = int(bar_w * 2.5)
                 cx = x + bar_w / 2
                 cy = y + bar_h / 2
@@ -1869,9 +1868,21 @@ class VisualizerWindow(QWidget):
             details_parts.append(media.album.strip())
         details = " • ".join([x for x in details_parts if x])
 
+        # Calculate button area height to reserve space at the bottom
+        mcfg = self.cfg.get("media_controls", {}) or {}
+        skip_buttons = self._use_widget_buttons and mcfg.get("use_widgets", False) and not mcfg.get("use_paint_fallback", False)
+        if skip_buttons:
+            controls_reserve_h = 0
+        else:
+            small_btn = int(max(22, min(44, box_h * 0.18)))
+            play_btn = int(small_btn * 1.16)
+            controls_reserve_h = play_btn + 18  # button height + padding
+
+        # Text region: from top of box to above the controls area
         top_y = box_y + 6
-        title_h = max(12, int(box_h * 0.48))
-        details_h = max(10, box_h - title_h - 8)
+        text_area_h = max(2, box_h - controls_reserve_h - 10)
+        title_h = max(12, int(text_area_h * 0.55))
+        details_h = max(10, text_area_h - title_h)
 
         left_offset = (cover_size + cover_gap) if show_cover_slot else 0
         title_rect_x = box_x + pad_x + left_offset

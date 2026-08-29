@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install PyQt6 numpy soundcard pillow winsdk pytest
+
+    - name: Run tests
+      run: python -m pytest tests/ -v --tb=short
+
+    - name: Verify mode imports
+      run: |
+        python -c "
+        from modes import load_builtin_modes
+        from modes.registry import list_modes
+        load_builtin_modes()
+        modes = list_modes()
+        print(f'Registered {len(modes)} modes:')
+        for m in modes:
+            print(f'  - {m[\"id\"]}: {m[\"label\"]}')
+        assert len(modes) >= 10, f'Expected >= 10 modes, got {len(modes)}'
+        "
+
+    - name: Verify UI imports
+      run: |
+        python -c "
+        from core.events import bus, TRACK_CHANGED
+        from ui.fluent_theme import RADIUS_CARD, FONT_FAMILY, lerp_color
+        from ui.monitor_manager import MonitorManager
+        from ui.gl_renderer import GLRenderer, HAS_OPENGL
+        print('All UI module imports OK')
+        "
