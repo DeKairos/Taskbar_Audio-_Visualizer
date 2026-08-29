@@ -21,7 +21,7 @@ DEFAULTS = {
     "visualizer_monitor": 0,  # monitor index for multi-monitor setups
     "taskbar_auto_hide_behavior": "follow",  # "follow", "hide", "always"
     "width_mode": "auto",    # "auto" (empty space), "percentage", "fixed"
-    "alignment_hint": "left",  # "left", "center", "right"
+    "alignment_hint": "left",  # "left", "center"
     "auto_hide": True,
     "auto_hide_timeout": 5.0, # seconds
     "glow": True,

@@ -381,8 +381,8 @@ class _VisualizerPage(QWidget):
 
         # Alignment Hint
         alignment_hint = cfg.get("alignment_hint", "left")
-        alignment_text = {"left": "Left", "center": "Center", "right": "Right"}.get(alignment_hint, "Left")
-        self.alignment_combo = _make_combo(["Left", "Center", "Right"], alignment_text)
+        alignment_text = {"left": "Left", "center": "Center"}.get(alignment_hint, "Left")
+        self.alignment_combo = _make_combo(["Left", "Center"], alignment_text)
         layout.addWidget(_SettingRow(
             "Alignment", self.alignment_combo,
             "Position of the visualizer within the taskbar area."
@@ -420,7 +420,7 @@ class _VisualizerPage(QWidget):
         self.cfg["width_percent"] = self.width_slider.value()
         width_mode_map = {"Auto (empty space)": "auto", "Percentage": "percentage", "Fixed pixels": "fixed"}
         self.cfg["width_mode"] = width_mode_map.get(self.width_mode_combo.currentText(), "auto")
-        alignment_map = {"Left": "left", "Center": "center", "Right": "right"}
+        alignment_map = {"Left": "left", "Center": "center"}
         self.cfg["alignment_hint"] = alignment_map.get(self.alignment_combo.currentText(), "left")
         sens_map = {"Low": 0.5, "Medium": 1.0, "High": 2.0}
         self.cfg["sensitivity"] = sens_map.get(self.sens_combo.currentText(), 1.0)

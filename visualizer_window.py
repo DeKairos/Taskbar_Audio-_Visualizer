@@ -83,6 +83,11 @@ class VisualizerWindow(QWidget):
         self._visible = True
         self._opacity = 1.0
 
+        # Audio decay state (melt animation when audio pauses)
+        self._decay_progress = 0.0  # 0.0 = full height, 1.0 = fully melted
+        self._decay_started_at = None  # When decay started
+        self._was_audio_playing = False  # Was audio playing last frame
+
         # Now-playing overlay: show briefly on track change, then fade out.
         self._media_overlay_started_at = 0.0
         self._media_overlay_duration = 3.5
@@ -699,23 +704,67 @@ class VisualizerWindow(QWidget):
                 self.setWindowOpacity(self._opacity)
             return
 
-        # Auto-hide logic
-        if self.cfg.get("auto_hide", True):
-            silence_dur = time.time() - self._last_sound_time
-            timeout = self.cfg.get("auto_hide_timeout", 5.0)
+        # Check if audio is currently playing
+        silence_dur = time.time() - self._last_sound_time
+        timeout = self.cfg.get("auto_hide_timeout", 5.0)
+        is_audio_playing = silence_dur < timeout
 
-            if silence_dur > timeout:
-                if self._opacity > 0:
-                    self._opacity = max(0, self._opacity - 0.05)
-                    self.setWindowOpacity(self._opacity)
+        # Handle audio decay (melt animation when audio pauses)
+        if self.cfg.get("auto_hide", True):
+            if is_audio_playing:
+                # Audio is playing
+                if self._was_audio_playing == False and self._decay_progress > 0:
+                    # Audio just resumed - animate bars back up
+                    self._decay_progress = max(0.0, self._decay_progress - dt / 0.5)  # 0.5s to recover
+                    if self._decay_progress <= 0:
+                        self._decay_started_at = None
+                elif self._decay_progress > 0:
+                    # Still recovering from previous decay
+                    self._decay_progress = max(0.0, self._decay_progress - dt / 0.5)
+                    if self._decay_progress <= 0:
+                        self._decay_started_at = None
+
+                # Opacity based on decay progress
+                self._opacity = 1.0 - (self._decay_progress * 0.9)  # Fade as we melt
+                self.setWindowOpacity(self._opacity)
+
+                if not self.isVisible() and self._decay_progress <= 0:
+                    self.show()
             else:
-                if self._opacity < 1.0:
-                    self._opacity = min(1.0, self._opacity + 0.1)
+                # Audio stopped - start or continue melting
+                if self._was_audio_playing:
+                    # Audio just stopped - start decay
+                    self._decay_started_at = time.time()
+                    self._decay_progress = 0.0
+
+                if self._decay_started_at is not None:
+                    # Calculate decay progress based on auto-hide timeout
+                    decay_dur = timeout  # Same as auto-hide timeout
+                    elapsed = time.time() - self._decay_started_at
+                    self._decay_progress = min(1.0, elapsed / decay_dur)
+
+                    # Opacity fades as decay progresses
+                    self._opacity = max(0.0, 1.0 - (self._decay_progress * 0.9))
                     self.setWindowOpacity(self._opacity)
+
+                    if self._decay_progress >= 1.0:
+                        # Fully melted - hide visualizer
+                        if self.isVisible():
+                            self.hide()
+                else:
+                    # No decay started yet but audio is silent - just fade opacity
+                    if self._opacity > 0:
+                        self._opacity = max(0, self._opacity - 0.05)
+                        self.setWindowOpacity(self._opacity)
         else:
+            # Auto-hide disabled - no decay animation
             if self._opacity < 1.0:
                 self._opacity = 1.0
+                self._decay_progress = 0.0
+                self._decay_started_at = None
                 self.setWindowOpacity(self._opacity)
+
+        self._was_audio_playing = is_audio_playing
 
         # Decay beat pulse and animate the moving background.
         if self._bg_pulse > 0:
@@ -1272,6 +1321,8 @@ class VisualizerWindow(QWidget):
 
         theme = self._resolve_theme()
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
@@ -1279,8 +1330,8 @@ class VisualizerWindow(QWidget):
             cap_val = peak_caps[i] * side_gain if peak_caps_enabled else val
             norm = self._energy_norm(val, max_val)
             cap_norm = self._energy_norm(cap_val, max_val)
-            bar_h = norm * (h - 6)
-            cap_h = cap_norm * (h - 6)
+            bar_h = norm * (h - 6) * decay_mult
+            cap_h = cap_norm * (h - 6) * decay_mult
             if bar_h < 0.6:
                 continue
 
@@ -1326,13 +1377,15 @@ class VisualizerWindow(QWidget):
 
         theme = self._resolve_theme()
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         # Build smooth path
         path = QPainterPath()
         points = []
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
-            norm = self._energy_norm(values[i] * side_gain, max_val)
+            norm = self._energy_norm(values[i] * side_gain, max_val) * decay_mult
             x = int(i * w / (num - 1)) if num > 1 else 0
             y = int(h - norm * (h - 8) - 4)
             points.append(QPointF(x, y))
@@ -1419,6 +1472,8 @@ class VisualizerWindow(QWidget):
 
         theme = self._resolve_theme()
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
@@ -1426,8 +1481,8 @@ class VisualizerWindow(QWidget):
             cap_val = peak_caps[i] * side_gain if peak_caps_enabled else val
             norm = self._energy_norm(val, max_val)
             cap_norm = self._energy_norm(cap_val, max_val)
-            half_h = norm * (mid_y - 3 - (center_gap if center_mode else 0))
-            cap_h = cap_norm * (mid_y - 3 - (center_gap if center_mode else 0))
+            half_h = norm * (mid_y - 3 - (center_gap if center_mode else 0)) * decay_mult
+            cap_h = cap_norm * (mid_y - 3 - (center_gap if center_mode else 0)) * decay_mult
             if half_h < 0.5:
                 continue
 
@@ -1491,6 +1546,8 @@ class VisualizerWindow(QWidget):
         left_gain, right_gain = self._stereo_split_gains()
         theme = self._resolve_theme()
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         cols_gap = 2
         col_w = max(2, int((w - cols_gap * (num + 1)) / max(1, num)))
         dot_h = 3
@@ -1505,8 +1562,8 @@ class VisualizerWindow(QWidget):
             norm = self._energy_norm(val, max_val)
             cap_norm = self._energy_norm(cap_val, max_val)
 
-            lit = int(round(norm * max_dots))
-            cap_idx = int(round(cap_norm * max_dots))
+            lit = int(round(norm * max_dots * decay_mult))
+            cap_idx = int(round(cap_norm * max_dots * decay_mult))
             x = cols_gap + int(i * (col_w + cols_gap))
 
             for j in range(max_dots):
@@ -1547,11 +1604,13 @@ class VisualizerWindow(QWidget):
         mid = h * 0.5
         amp = max(5.0, h * 0.42)
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         points = []
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
-            norm = self._energy_norm(values[i] * side_gain, max_val)
+            norm = self._energy_norm(values[i] * side_gain, max_val) * decay_mult
             centered = (norm - 0.5) * 2.0
             x = int(i * w / (num - 1)) if num > 1 else 0
             y = int(mid - centered * amp * 0.65)
@@ -1615,6 +1674,8 @@ class VisualizerWindow(QWidget):
         center_gap = int(max(0, self.cfg.get("mirror_center_gap", 2) or 2))
         mid_y = h * 0.5
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
@@ -1626,8 +1687,8 @@ class VisualizerWindow(QWidget):
             x = gap + int(i * (bar_w + gap))
             dist = abs((x + bar_w * 0.5) - center_x) / max(center_x, 1.0)
             depth_scale = 0.68 + (0.52 * (1.0 - dist))
-            half_h = norm * (mid_y - 4 - center_gap) * depth_scale
-            cap_h = cap_norm * (mid_y - 4 - center_gap) * depth_scale
+            half_h = norm * (mid_y - 4 - center_gap) * depth_scale * decay_mult
+            cap_h = cap_norm * (mid_y - 4 - center_gap) * depth_scale * decay_mult
             if half_h < 0.5:
                 continue
 
@@ -1674,11 +1735,13 @@ class VisualizerWindow(QWidget):
         pr, pg, pb = theme["peak"]
         gr, gg, gb = theme["glow"]
 
+        decay_mult = max(0.0, 1.0 - self._decay_progress)
+
         points = []
         for i in range(num):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
-            norm = self._energy_norm(values[i] * side_gain, max_val)
+            norm = self._energy_norm(values[i] * side_gain, max_val) * decay_mult
             x = int(i * w / (num - 1)) if num > 1 else w / 2
             y = int(h - norm * (h - 8) - 4)
             points.append(QPointF(x, y))
@@ -1701,7 +1764,7 @@ class VisualizerWindow(QWidget):
         for i, pt in enumerate(points):
             pan = (i / (num - 1)) if num > 1 else 0.5
             side_gain = (left_gain * (1.0 - pan)) + (right_gain * pan)
-            norm = self._energy_norm(values[i] * side_gain, max_val)
+            norm = self._energy_norm(values[i] * side_gain, max_val) * decay_mult
             r, g, b = bar_color(theme, norm, i, num)
             size = 1.5 + (norm * 2.5)
 
