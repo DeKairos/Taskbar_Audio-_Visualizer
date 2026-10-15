@@ -154,9 +154,18 @@ def test_helper_applies_update_or_restores_previous_version(fake_apps, tmp_path,
         assert not (runtime / "new.dll").exists()
     marker = Path(str(executable) + ".launched")
     deadline = time.monotonic() + 3
-    while not marker.exists() and time.monotonic() < deadline:
+    launched_version = None
+    # File.WriteAllText creates the file before its contents are visible.
+    # Wait for the completed write, not just existence, on fast CI runners.
+    while time.monotonic() < deadline:
+        try:
+            launched_version = marker.read_text()
+        except OSError:
+            pass  # The app may not have created/released its marker yet.
+        if launched_version == expected:
+            break
         time.sleep(0.01)
-    assert marker.read_text() == expected
+    assert launched_version == expected
     if kind == "installed":
         arguments = (stage / "arguments.txt").read_text()
         assert "/VERYSILENT" in arguments
