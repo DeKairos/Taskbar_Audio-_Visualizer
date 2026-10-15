@@ -3,7 +3,8 @@ Shared resource helpers for icon and bundled file resolution.
 """
 import os
 import sys
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt6.QtCore import Qt
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -34,16 +35,23 @@ def get_resource_path(relative_path: str) -> str:
 def get_app_icon() -> QIcon:
     """Return app icon.
 
-    Frozen builds prefer the executable icon so installer upgrades cannot be
-    masked by a stale copied assets/app_icon.ico file.
+    Use an explicitly bundled ICO, with a generated fallback if it cannot render.
     """
-    if getattr(sys, "frozen", False):
-        exe_icon = QIcon(sys.executable)
-        if not exe_icon.isNull():
-            return exe_icon
-
     icon = QIcon(get_resource_path(os.path.join("assets", "app_icon.ico")))
-    if not icon.isNull():
+    if not icon.pixmap(16, 16).isNull():
         return icon
 
-    return QIcon()
+    # QIcon(executable) is not a reliable Windows executable-icon extractor.
+    # Keep a visible, high-contrast icon even if an asset is missing or corrupt.
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor(10, 36, 52))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(0, 0, 32, 32)
+    painter.setBrush(QColor(92, 228, 255))
+    for x, height in ((6, 10), (12, 20), (18, 15), (24, 23)):
+        painter.drawRoundedRect(x, 28 - height, 3, height, 1, 1)
+    painter.end()
+    return QIcon(pixmap)

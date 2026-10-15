@@ -7,6 +7,7 @@ import os
 import sys
 import winreg
 from copy import deepcopy
+from modes import load_builtin_modes, get_mode
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".audio_visualizer.json")
 APP_NAME = "AudioVisualizer"
@@ -16,6 +17,7 @@ DEFAULTS = {
     "sensitivity": 1.0,       # 0.5, 1.0, 2.0
     "enabled": True,
     "bar_count": 64,
+    "capture_hop": 1024,     # new audio samples per spectrum update
     "width_percent": 40,      # % of taskbar width (left side)
     "visualizer_height": 40,  # visualizer height in pixels
     "visualizer_monitor": 0,  # monitor index for multi-monitor setups
@@ -58,6 +60,7 @@ DEFAULTS.setdefault("media_controls", {
 AUDIO_CONFIG_KEYS = frozenset({
     "bar_count",
     "fft_size",
+    "capture_hop",
     "freq_min",
     "freq_max",
     "use_microphone",
@@ -99,7 +102,8 @@ def _boolean(value, default):
 def normalize_config(cfg: dict) -> dict:
     """Clamp persisted values before they reach Qt or the audio thread."""
     normalized = dict(cfg)
-    if normalized.get("mode") not in {"bars", "wave", "mirror", "dot_matrix"}:
+    load_builtin_modes()
+    if not isinstance(normalized.get("mode"), str) or get_mode(normalized.get("mode")) is None:
         normalized["mode"] = "bars"
     normalized["bar_count"] = int(_number(normalized.get("bar_count"), 64, 8, 128, int))
     normalized["width_percent"] = int(_number(normalized.get("width_percent"), 40, 10, 100, int))
@@ -133,6 +137,8 @@ def normalize_config(cfg: dict) -> dict:
     except (TypeError, ValueError):
         fft_size = 2048
     normalized["fft_size"] = fft_size if fft_size in {2048, 4096, 8192} else 2048
+    hop = int(_number(normalized.get("capture_hop"), 1024, 512, 2048, int))
+    normalized["capture_hop"] = hop if hop in {512, 1024, 2048} else 1024
 
     normalized["freq_min"] = int(_number(normalized.get("freq_min"), 40, 20, 200, int))
     normalized["freq_max"] = int(_number(normalized.get("freq_max"), 16000, 4000, 20000, int))

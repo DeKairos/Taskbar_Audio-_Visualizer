@@ -42,6 +42,7 @@ Write-Host "[Package] Compiling installer"
     "/DMyPublisher=$Publisher" `
     "/DMyAppURL=$AppUrl" `
     $issFile
+if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed" }
 
 Write-Host "[Package] Done"
 Write-Host "[Package] App bundle: dist\\AudioVisualizer"

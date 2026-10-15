@@ -16,8 +16,9 @@ from PyQt6.QtGui import (
     QRadialGradient, QLinearGradient, QFont, QPixmap,
     QCursor,
 )
-from color_themes import get_theme, bar_color
+from color_themes import get_theme, bar_color, artwork_theme, ThemeTransition
 from ui.monitor_manager import MonitorManager
+from core.spectrum import decay_factor
 
 # Win32 constants for click-through
 GWL_EXSTYLE = -20
@@ -57,8 +58,6 @@ class VisualizerWindow(QWidget):
         self.fft_data = np.zeros(num)
         self.smoothed = np.zeros(num)
         self.peak_caps = np.zeros(num)
-        self._prev_weighted = np.zeros(num)
-        self._stagnant_fft_frames = 0
         self._display_level_ref = 1.0
 
         # Dynamic quality state adapts visual cost to frame time.
@@ -67,6 +66,7 @@ class VisualizerWindow(QWidget):
         self._glow_quality_scale = 1.0
         self._theme_cache_key = None
         self._theme_cache = None
+        self._theme_transition = ThemeTransition()
 
         # Beat-driven visual motion state
         self._bass_history = []
@@ -79,7 +79,7 @@ class VisualizerWindow(QWidget):
         self._particle_cap = 24
 
         # Auto-hide state
-        self._last_sound_time = time.time()
+        self._last_sound_time = time.monotonic()
         self._visible = True
         self._opacity = 1.0
 
@@ -109,6 +109,7 @@ class VisualizerWindow(QWidget):
         # Runtime keep-alive counter for z-order/style refresh cadence.
         self._style_refresh_counter = 0
         self._last_fft_update_time = time.time()
+        self._last_spectrum_time = time.monotonic()
         self._last_tick_time = time.monotonic()
 
         # External modules (set by main.py)
@@ -149,8 +150,9 @@ class VisualizerWindow(QWidget):
         # Periodic reposition timer — adapts if Start button moves
         self._reposition_timer = QTimer()
         self._reposition_timer.timeout.connect(self._maybe_reposition)
-        self._reposition_timer.start(5000)
+        self._reposition_timer.start(500)
         self._last_vis_w = 0
+        self._taskbar_suppressed = False
 
         # Periodic click-through refresh timer — keeps the window click-through
         # even if taskbar or other events try to change it
@@ -226,7 +228,7 @@ class VisualizerWindow(QWidget):
                 # If overlay is visible, try the painted/widget media control hit-testing.
                 if self._media_overlay_alpha > 0.01 and (
                     getattr(self, "_media_button_rects", None) or getattr(self, "controls_rects", None)
-                ):
+):
                     try:
                         # Prefer the unified handler which will call the monitor actions.
                         self.handle_media_click(widget_pos.x(), widget_pos.y())
@@ -240,7 +242,7 @@ class VisualizerWindow(QWidget):
                                 self._activate_media_control(name)
                                 break
                     # keep overlay visible
-                    self._media_overlay_started_at = time.time()
+                    self._media_overlay_started_at = time.monotonic()
                 else:
                     self._show_media_overlay_on_demand()
 
@@ -281,54 +283,32 @@ class VisualizerWindow(QWidget):
         print(f"[Visualizer] Taskbar overlay: ({vis_x},{vis_y}) {vis_w}x{vis_h}  edge={edge_name} mode={width_mode} align={alignment_hint} monitor={monitor_index}")
 
     def _maybe_reposition(self):
-        """Re-check taskbar position and resize if it changed."""
-        monitor_index = self.cfg.get("visualizer_monitor", 0)
-        width_percent = self.cfg.get("width_percent", 40)
-        vis_height = self.cfg.get("visualizer_height", 40)
-        width_mode = self.cfg.get("width_mode", "auto")
-        alignment_hint = self.cfg.get("alignment_hint", "left")
-
+        """Follow taskbar visibility and recover geometry after display/shell changes."""
         try:
-            taskbar_info = self._monitor_mgr.get_taskbar_info(monitor_index)
-            is_autohidden = taskbar_info.get("autohide", False)
+            index = self.cfg.get("visualizer_monitor", 0)
+            info = self._monitor_mgr.get_taskbar_info(index)
             behavior = self.cfg.get("taskbar_auto_hide_behavior", "follow")
-
-            if is_autohidden and behavior == "hide":
-                if self.isVisible():
-                    self.hide()
+            self._taskbar_suppressed = bool(info.get("autohide") and (
+                behavior == "hide" or (behavior == "follow" and info.get("hidden"))
+            ))
+            if self._taskbar_suppressed:
+                self.hide()
                 return
-            elif is_autohidden and behavior == "follow":
-                if not self.isVisible():
-                    self.show()
-                vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
-                    monitor_index=monitor_index,
-                    width_percent=width_percent,
-                    vis_height=vis_height,
-                    width_mode=width_mode,
-                    alignment_hint=alignment_hint
-                )
-                if abs(vis_w - self._last_vis_w) > 10 or abs(vis_x - self.x()) > 5 or abs(vis_y - self.y()) > 5:
-                    self.position_on_taskbar()
-                return
-            elif behavior == "always":
-                if not self.isVisible():
-                    self.show()
-        except Exception:
-            pass
-
-        try:
-            vis_x, vis_y, vis_w, vis_h = self._monitor_mgr.visualizer_position(
-                monitor_index=monitor_index,
-                width_percent=width_percent,
-                vis_height=vis_height,
-                width_mode=width_mode,
-                alignment_hint=alignment_hint
+            pos = self._monitor_mgr.visualizer_position(
+                monitor_index=index,
+                width_percent=self.cfg.get("width_percent", 40),
+                vis_height=self.cfg.get("visualizer_height", 40),
+                width_mode=self.cfg.get("width_mode", "auto"),
+                alignment_hint=self.cfg.get("alignment_hint", "left"),
             )
+            if (self.x(), self.y(), self.width(), self.height()) != pos:
+                self.setGeometry(*pos)
+                self._last_vis_w = pos[2]
+            if self.cfg.get("enabled", True) and self._opacity > 0.1 and not self.isVisible():
+                self.show()
+                self._ensure_topmost(force_bounce=True)
         except Exception:
             return
-
-        if abs(vis_w - self._last_vis_w) > 10 or abs(vis_x - self.x()) > 5 or abs(vis_y - self.y()) > 5:
-            self.position_on_taskbar()
 
     def _detect_start_button_x(self, dpi_ratio: float):
         """Legacy method kept for compatibility - delegates to MonitorManager."""
@@ -581,6 +561,9 @@ class VisualizerWindow(QWidget):
     # ====================== DATA INPUT ===============================
 
     def update_fft(self, data: np.ndarray):
+        now = time.monotonic()
+        elapsed = min(0.25, max(0.001, now - self._last_spectrum_time))
+        self._last_spectrum_time = now
         self._last_fft_update_time = time.time()
         n = min(len(self.smoothed), len(data))
         sens = self.cfg.get("sensitivity", 1.0)
@@ -602,42 +585,24 @@ class VisualizerWindow(QWidget):
             if np.isfinite(peak) and np.isfinite(avg):
                 has_meaningful_audio = bool(peak > 0.07 or avg > 0.014)
 
-        # Some loopback drivers keep emitting nearly-identical FFT frames on pause.
-        # Treat persistent stagnant frames as paused/silent so visuals decay naturally.
-        stagnant_input = False
-        if n > 0:
-            if len(self._prev_weighted) != len(self.smoothed):
-                self._prev_weighted = np.zeros(len(self.smoothed))
-            prev_view = self._prev_weighted[:n]
-            delta = float(np.mean(np.abs(weighted - prev_view)))
-            denom = max(float(np.mean(np.abs(weighted))), 1e-6)
-            rel_delta = delta / denom
-            stagnant_threshold = float(self.cfg.get("stagnant_delta_threshold", 0.0012) or 0.0012)
-            stagnant_threshold = max(0.0001, min(0.02, stagnant_threshold))
-            if rel_delta < stagnant_threshold:
-                self._stagnant_fft_frames += 1
-            else:
-                self._stagnant_fft_frames = 0
-            stagnant_frames_required = int(self.cfg.get("stagnant_frames_required", 14) or 14)
-            stagnant_frames_required = max(4, min(60, stagnant_frames_required))
-            stagnant_input = self._stagnant_fft_frames >= stagnant_frames_required
-            prev_view[:] = weighted
-        else:
-            self._stagnant_fft_frames = 0
+        # A sustained note can produce identical spectra. Signal energy, rather
+        # than frame similarity, determines silence so drones don't disappear.
 
         # Smooth: fast attack, slow decay
         if n > 0:
             smoothed_view = self.smoothed[:n]
-            if has_meaningful_audio and not stagnant_input:
+            if has_meaningful_audio:
+                attack = decay_factor(0.25, elapsed)
+                decay = decay_factor(0.86, elapsed)
                 attack_mask = weighted > smoothed_view
-                smoothed_view[attack_mask] = (smoothed_view[attack_mask] * 0.25) + (weighted[attack_mask] * 0.75)
+                smoothed_view[attack_mask] = (smoothed_view[attack_mask] * attack) + (weighted[attack_mask] * (1.0 - attack))
                 decay_mask = ~attack_mask
-                smoothed_view[decay_mask] = (smoothed_view[decay_mask] * 0.86) + (weighted[decay_mask] * 0.14)
+                smoothed_view[decay_mask] = (smoothed_view[decay_mask] * decay) + (weighted[decay_mask] * (1.0 - decay))
             else:
                 # During pause/silence, ease bars toward base level (zero), not noise floor.
                 silent_decay = float(self.cfg.get("silent_decay_rate", 0.965) or 0.965)
                 silent_decay = max(0.90, min(0.99, silent_decay))
-                smoothed_view *= silent_decay
+                smoothed_view *= decay_factor(silent_decay, elapsed)
                 # Prevent denormal-like tails from visually "sticking" above baseline.
                 smoothed_view[smoothed_view < 0.012] = 0.0
 
@@ -647,7 +612,7 @@ class VisualizerWindow(QWidget):
             peak_decay = max(0.01, min(0.12, peak_decay))
             if n > 0:
                 self.peak_caps[:n] = np.maximum(
-                    self.peak_caps[:n] * (1.0 - peak_decay),
+                    self.peak_caps[:n] * decay_factor(1.0 - peak_decay, elapsed),
                     self.smoothed[:n],
                 )
         else:
@@ -665,29 +630,29 @@ class VisualizerWindow(QWidget):
             ref_decay_silent = max(0.85, min(0.995, ref_decay_silent))
 
             if current_peak > self._display_level_ref:
+                ref_attack = 1.0 - decay_factor(1.0 - ref_attack, elapsed)
                 self._display_level_ref = (
                     (self._display_level_ref * (1.0 - ref_attack))
                     + (current_peak * ref_attack)
                 )
             else:
-                decay = ref_decay_silent if (not has_meaningful_audio or stagnant_input) else ref_decay_active
-                self._display_level_ref *= decay
+                decay = ref_decay_silent if not has_meaningful_audio else ref_decay_active
+                self._display_level_ref *= decay_factor(decay, elapsed)
 
             self._display_level_ref = max(0.12, min(200.0, self._display_level_ref))
 
         # Detect meaningful audio from incoming signal (not only smoothed bars).
         # The previous threshold (smoothed max > 1.0) could miss normal playback,
         # causing auto-hide to fade out and never recover.
-        if n > 0 and has_meaningful_audio and not stagnant_input:
-            self._last_sound_time = time.time()
+        if n > 0 and has_meaningful_audio:
+            self._last_sound_time = time.monotonic()
 
         # Beat detection on low-frequency bins (bass)
         if self.cfg.get("beat_flash", True):
             bass = float(np.mean(self.fft_data[:6]))
-            self._bass_history.append(bass)
-            if len(self._bass_history) > 30:
-                self._bass_history.pop(0)
-            avg_bass = np.mean(self._bass_history) if self._bass_history else 0
+            self._bass_history.append((now, bass))
+            self._bass_history = [(t, value) for t, value in self._bass_history if now - t < 1.4]
+            avg_bass = np.mean([value for _, value in self._bass_history])
             if bass > avg_bass * 1.8 and bass > 5.0:
                 self._bg_pulse = 1.0
 
@@ -698,6 +663,10 @@ class VisualizerWindow(QWidget):
         dt = min(0.1, max(0.001, now - self._last_tick_time))
         self._last_tick_time = now
 
+        if self._taskbar_suppressed:
+            self.hide()
+            return
+
         if not self.cfg.get("enabled", True):
             if self._opacity > 0:
                 self._opacity = max(0, self._opacity - 0.1)
@@ -705,7 +674,7 @@ class VisualizerWindow(QWidget):
             return
 
         # Check if audio is currently playing
-        silence_dur = time.time() - self._last_sound_time
+        silence_dur = time.monotonic() - self._last_sound_time
         timeout = self.cfg.get("auto_hide_timeout", 5.0)
         is_audio_playing = silence_dur < timeout
 
@@ -734,13 +703,13 @@ class VisualizerWindow(QWidget):
                 # Audio stopped - start or continue melting
                 if self._was_audio_playing:
                     # Audio just stopped - start decay
-                    self._decay_started_at = time.time()
+                    self._decay_started_at = time.monotonic()
                     self._decay_progress = 0.0
 
                 if self._decay_started_at is not None:
                     # Calculate decay progress based on auto-hide timeout
                     decay_dur = timeout  # Same as auto-hide timeout
-                    elapsed = time.time() - self._decay_started_at
+                    elapsed = time.monotonic() - self._decay_started_at
                     self._decay_progress = min(1.0, elapsed / decay_dur)
 
                     # Opacity fades as decay progresses
@@ -853,7 +822,7 @@ class VisualizerWindow(QWidget):
             media.changed = False
             return
 
-        now = time.time()
+        now = time.monotonic()
         if media.changed:
             # Track metadata changed: show card + run morph once per change.
             self._media_overlay_started_at = now
@@ -930,31 +899,19 @@ class VisualizerWindow(QWidget):
         media = self.media_monitor.info
         if not media.title:
             return
-        now = time.time()
+        now = time.monotonic()
         self._media_overlay_started_at = now
 
     def _resolve_theme(self) -> dict:
-        """Return the active color theme, applying album-art color only in dynamic mode."""
+        """Crossfade to the selected theme or a coherent album-art palette."""
         theme_name = self.cfg.get("theme", "cyan")
-        use_album_art = theme_name == "album_art"
-        accent_rgb = (
-            self.media_monitor.info.accent_rgb
-            if self.media_monitor and self.media_monitor.info.accent_rgb
-            else None
-        )
-        cache_key = (theme_name, accent_rgb)
-        if cache_key == self._theme_cache_key and self._theme_cache is not None:
-            return self._theme_cache
-
-        theme = dict(get_theme(theme_name))
-        if use_album_art and accent_rgb:
-            theme["base"] = accent_rgb
-            theme["peak"] = tuple(min(c + 100, 255) for c in accent_rgb)
-            theme["glow"] = tuple(min(c + 50, 255) for c in accent_rgb)
-
-        self._theme_cache_key = cache_key
-        self._theme_cache = theme
-        return theme
+        media = self.media_monitor.info if self.media_monitor else None
+        accent = media.accent_rgb if theme_name == "album_art" and media and media.cover_bytes else None
+        cache_key = (theme_name, accent)
+        if cache_key != self._theme_cache_key or self._theme_cache is None:
+            self._theme_cache = artwork_theme(accent) if accent else dict(get_theme(theme_name))
+            self._theme_cache_key = cache_key
+        return self._theme_transition.resolve(self._theme_cache, time.monotonic())
 
     def _startup_progress(self) -> float:
         """0.0->1.0 progress for initial reveal animation."""
@@ -968,7 +925,7 @@ class VisualizerWindow(QWidget):
         if self._track_morph_started_at <= 0:
             return 0.0
 
-        elapsed = time.time() - self._track_morph_started_at
+        elapsed = time.monotonic() - self._track_morph_started_at
         if elapsed <= 0 or elapsed >= self._track_morph_duration:
             return 0.0
 

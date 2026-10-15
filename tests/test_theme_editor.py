@@ -10,7 +10,9 @@ def test_theme_editor_class_exists():
     assert hasattr(ThemeEditor, "theme_saved")
 
 
-def test_load_save_delete_custom_themes():
+def test_load_save_delete_custom_themes(monkeypatch, tmp_path):
+    import ui.theme_editor
+    monkeypatch.setattr(ui.theme_editor, "THEMES_DIR", str(tmp_path / "themes"))
     from ui.theme_editor import save_custom_theme, load_custom_themes, delete_custom_theme
 
     test_theme = {

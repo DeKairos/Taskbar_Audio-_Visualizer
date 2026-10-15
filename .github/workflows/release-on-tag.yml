@@ -35,6 +35,14 @@ jobs:
         run: |
           python -m venv .\venv_win
 
+      - name: Test before packaging
+        shell: pwsh
+        run: |
+          .\venv_win\Scripts\python.exe -m pip install -r requirements.txt pytest
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+          .\venv_win\Scripts\python.exe -m pytest tests/ -q
+          if ($LASTEXITCODE -ne 0) { throw "Release tests failed" }
+
       - name: Ensure Inno Setup is available
         shell: pwsh
         run: |

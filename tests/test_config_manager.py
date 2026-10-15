@@ -57,7 +57,7 @@ def test_legacy_mode_migration(monkeypatch, tmp_path):
 def test_config_has_media_controls():
     from config_manager import DEFAULTS
     # media_controls should be in DEFAULTS (set via setdefault)
-    assert "media_controls" in DEFAULTS or True  # setdefault may not work as expected
+    assert "media_controls" in DEFAULTS
 
 
 def test_load_config_does_not_share_nested_defaults(monkeypatch, tmp_path):
@@ -77,6 +77,22 @@ def test_audio_config_change_detection():
     assert audio_config_changed({"theme": "cyan"}, {"theme": "matrix"}) is False
     assert audio_config_changed({"fft_size": 4096}, {"fft_size": 8192}) is True
     assert audio_config_changed({"use_microphone": False}, {"use_microphone": True}) is True
+    assert audio_config_changed({"capture_hop": 1024}, {"capture_hop": 512}) is True
+
+
+def test_skyline_survives_save_and_reload(monkeypatch, tmp_path):
+    import config_manager
+    monkeypatch.setattr(config_manager, "CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(config_manager, "is_startup_enabled", lambda: False)
+    config_manager.save_config({"mode": "skyline"})
+    assert config_manager.load_config()["mode"] == "skyline"
+
+
+def test_malformed_mode_and_capture_hop_are_safe():
+    from config_manager import normalize_config
+    cfg = normalize_config({"mode": [], "capture_hop": "bad"})
+    assert cfg["mode"] == "bars"
+    assert cfg["capture_hop"] == 1024
 
 
 def test_invalid_config_values_are_normalized():

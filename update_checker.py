@@ -76,10 +76,12 @@ def get_current_version() -> str:
     """Return installed app version, env override, git tag fallback, or default."""
     if getattr(sys, "frozen", False):
         try:
-            base = os.path.dirname(sys.executable)
-            version_file = os.path.join(base, "VERSION.txt")
-            if os.path.exists(version_file):
-                with open(version_file, "r", encoding="utf-8") as f:
+            bases = [getattr(sys, "_MEIPASS", ""), os.path.dirname(sys.executable)]
+            for base in filter(None, bases):
+                version_file = os.path.join(base, "VERSION.txt")
+                if not os.path.exists(version_file):
+                    continue
+                with open(version_file, "r", encoding="utf-8-sig") as f:
                     first = f.readline().strip()
                 m = re.search(r"(\d+\.\d+\.\d+)", first)
                 if m:
@@ -281,6 +283,7 @@ def _latest_version_from_releases_api(timeout: float = 6.0):
         "release_notes": str(data.get("body") or ""),
         "installer_asset_url": installer_asset_url,
         "installer_asset_name": installer_asset_name,
+        "release_assets": data.get("assets") or [],
     }
 
 
@@ -411,4 +414,5 @@ def check_for_updates(timeout: float = 6.0) -> dict:
         "release_notes": release_notes,
         "installer_asset_url": installer_asset_url,
         "installer_asset_name": installer_asset_name,
+        "release_assets": payload.get("release_assets") or [],
     }

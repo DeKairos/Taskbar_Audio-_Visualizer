@@ -4,7 +4,8 @@ Param(
     [string]$ProductName = "Audio Visualizer",
     [string]$FileDescription = "Windows taskbar audio visualizer",
     [switch]$OneFile,
-    [switch]$SkipClean
+    [switch]$SkipClean,
+    [switch]$SkipDependencyInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,14 +31,28 @@ while ($versionParts.Count -lt 4) {
 }
 $fileVersion = ($versionParts[0..3] -join ".")
 
-Write-Host "[Build] Installing packaging dependencies"
-& $python -m pip install --upgrade pip
-& $python -m pip install "pyinstaller==$pyinstallerVersion" "pyinstaller-hooks-contrib$pyinstallerHooksRange"
-& $python -m pip install -r requirements.txt
+if (!$SkipDependencyInstall) {
+    Write-Host "[Build] Installing packaging dependencies"
+    & $python -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
+    & $python -m pip install "pyinstaller==$pyinstallerVersion" "pyinstaller-hooks-contrib$pyinstallerHooksRange"
+    if ($LASTEXITCODE -ne 0) { throw "Packaging dependency installation failed" }
+    & $python -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw "Application dependency installation failed" }
+}
 
 if ($SkipClean) {
     Write-Host "[Build] Skipping cleanup of previous artifacts"
 } else {
+    # Resolve and validate every cleanup target before recursively removing it.
+    foreach ($name in @("build", "dist", "AudioVisualizer.spec")) {
+        $cleanupPath = [IO.Path]::GetFullPath((Join-Path $projectRoot $name))
+        if ((Split-Path -Parent $cleanupPath) -ne $projectRoot -or
+            ((Test-Path -LiteralPath $cleanupPath) -and
+             ((Get-Item -LiteralPath $cleanupPath).Attributes -band [IO.FileAttributes]::ReparsePoint))) {
+            throw "Unsafe build cleanup target: $cleanupPath"
+        }
+    }
     Write-Host "[Build] Cleaning old artifacts"
     if (Test-Path ".\build") { Remove-Item ".\build" -Recurse -Force }
     if (Test-Path ".\dist") { Remove-Item ".\dist" -Recurse -Force }
@@ -46,6 +61,7 @@ if ($SkipClean) {
 
 Write-Host "[Build] Generating app icon"
 & $python ".\tools\generate_icon.py"
+if ($LASTEXITCODE -ne 0) { throw "Icon generation failed" }
 
 New-Item -ItemType Directory -Path ".\build" -Force | Out-Null
 
@@ -81,6 +97,7 @@ VSVersionInfo(
 "@ | Set-Content -Path $versionFile -Encoding UTF8
 
 Write-Host "[Build] Building Windows app bundle"
+Set-Content -Path ".\build\VERSION.txt" -Value $Version -Encoding UTF8
 $pyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -89,10 +106,20 @@ $pyInstallerArgs = @(
     "--name", "AudioVisualizer",
     "--icon", $iconPath,
     "--version-file", $versionFile,
+    "--add-data", "build\VERSION.txt;.",
+    "--add-data", "assets\app_icon.ico;assets",
+    "--add-data", "tools\update_helper.ps1;tools",
     "--collect-all", "winsdk",
     "--hidden-import", "comtypes.stream",
     "--hidden-import", "pycaw.pycaw"
 )
+
+# Qt uses Windows ICU's unversioned exports. Tools on PATH (such as Poppler)
+# can supply an incompatible icuuc.dll that PyInstaller would otherwise collect.
+$windowsIcu = Join-Path $env:SystemRoot "System32\icuuc.dll"
+if (Test-Path $windowsIcu) {
+    $pyInstallerArgs += @("--add-binary", "$windowsIcu;.")
+}
 
 if ($OneFile) {
     $pyInstallerArgs += "--onefile"
@@ -101,6 +128,7 @@ if ($OneFile) {
 $pyInstallerArgs += "main.py"
 
 & $python @pyInstallerArgs
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 
 Write-Host "[Build] Creating release metadata"
 if ($OneFile) {
@@ -125,3 +153,7 @@ Build date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     Write-Host "[Build] Complete. Output: $releaseDir"
     Write-Host "[Build] Next: compile installer with installer\AudioVisualizer.iss"
 }
+
+$smokeExe = if ($OneFile) { ".\dist\AudioVisualizer.exe" } else { ".\dist\AudioVisualizer\AudioVisualizer.exe" }
+& $python ".\tools\verify_frozen.py" $smokeExe $Version
+if ($LASTEXITCODE -ne 0) { throw "Frozen build verification failed" }

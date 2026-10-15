@@ -7,6 +7,7 @@ This section is for people who want to install and use Audio Visualizer without 
 - If you only need to install the app: [install/INSTALLER.md](install/INSTALLER.md)
 - If you want complete end-user installation details (installer and portable): [install/INSTALLATION.md](install/INSTALLATION.md)
 - If the app installed but you are not sure what to check first: [use/FIRST_RUN.md](use/FIRST_RUN.md)
+- To update, restart, or recover from a failed update: [use/UPDATES.md](use/UPDATES.md)
 - If something is not working: [help/TROUBLESHOOTING.md](help/TROUBLESHOOTING.md)
 
 ## Recommended Reading Order
@@ -18,5 +19,5 @@ This section is for people who want to install and use Audio Visualizer without 
 ## Important Notes
 
 - End users do not need Python or VS Code when using the installer build.
-- Most settings are controlled from the system tray icon.
+- Most settings are controlled from the **Settings** window (open via tray icon → Settings...).
 - If you were sent a portable folder instead of an installer, use the portable instructions in [install/INSTALLATION.md](install/INSTALLATION.md).

@@ -6,16 +6,16 @@
 
 - Windows 10 or later
 - Python 3.10+
-- Virtual environment already set up in `venv_win/`
+- Create a virtual environment in `venv_win/` as shown below.
 
 ### First-Time Setup
 
-If dependencies aren't installed yet, run:
+From the project directory, create the environment and install dependencies:
 
 ```powershell
-cd c:\Users\ADMIN\programs\Projects\audio_visualizer
+python -m venv venv_win
 .\venv_win\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.txt pytest
 ```
 
 ## Running the Application
@@ -39,41 +39,24 @@ python main.py
 
 ### Accessing Controls
 
-Right-click the **cyan tray icon** to open the menu:
+Right-click the tray icon to open the menu:
 
 ```
+├─ Settings...
 ├─ Hide Visualizer / Show Visualizer
-├─ Mode
-│  ├─ Bars (default)
-│  ├─ Waveform
-│  └─ Mirror
-├─ Sensitivity
-│  ├─ Low (0.5x)
-│  ├─ Medium (1.0x)
-│  └─ High (2.0x)
-├─ Theme
-│  ├─ Cyan (default)
-│  ├─ Neon Purple
-│  ├─ Sunset
-│  ├─ Matrix Green
-│  └─ Rainbow
-├─ Width
-│  ├─ 25% of taskbar
-│  ├─ 40% of taskbar (default)
-│  ├─ 60% of taskbar
-│  └─ 100% of taskbar
-├─ ✓ Glow Effect
-├─ ✓ Beat Flash
-├─ ✓ Auto-Hide
-├─ ✓ Start with Windows (startup registry)
+├─ Check for updates
 └─ Quit
 ```
+
+Open **Settings...** for visualization modes (Bars, Wave, Mirror, Dot Matrix,
+Skyline), themes, sensitivity, layout, audio input, media controls, and startup
+preferences. Changes apply and save automatically.
 
 ### Interactive Features
 
 #### Now-Playing Info
 
-- On track change, a centered now-playing card appears briefly
+- The now-playing card appears once initially; click the visualizer area to show it again
 - **Line 1** shows title
 - **Line 2** shows artist and album
 - The card fades out automatically so bars remain visible

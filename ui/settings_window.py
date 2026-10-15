@@ -9,10 +9,10 @@ import time
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
     QFrame, QPushButton, QComboBox, QSlider, QCheckBox, QSpinBox,
-    QColorDialog, QGroupBox, QGridLayout, QSizePolicy, QStackedWidget,
+    QColorDialog, QGroupBox, QGridLayout, QSizePolicy,
     QApplication,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QBrush, QPen, QPainterPath
 from ui.fluent_theme import (
     RADIUS_CARD, RADIUS_MEDIUM, SPACE_SM, SPACE_MD, SPACE_LG, SPACE_XL,
@@ -20,6 +20,69 @@ from ui.fluent_theme import (
     accent_color, qcolor_with_alpha_f, lerp_color,
 )
 from color_themes import THEMES, THEME_NAMES, THEME_DISPLAY
+from update_checker import get_current_version
+
+
+# ─── Typography tokens for secondary/value text ────────────────────
+
+CAPTION_SIZE = FONT_SIZES["caption"]            # 12 px
+SECONDARY_ALPHA = text_secondary(True).alpha()  # Fluent secondary text (70%)
+VALUE_ALPHA = 200                               # readouts carry data, not prose
+
+
+def _small_text_css(size: int, alpha: int) -> str:
+    """Stylesheet for compact secondary/value labels."""
+    return f"""
+        QLabel {{
+            color: rgba(255,255,255,{alpha});
+            font-family: {FONT_FAMILY}, Segoe UI;
+            font-size: {size}px;
+        }}
+    """
+
+
+def _attach_readout(slider: QSlider, suffix: str = "", formatter=None) -> QLabel:
+    """Pair a slider with a right-aligned numeric readout of its position.
+
+    The readout only reports what the handle already shows; storage scaling
+    stays in each page's ``_on_change``. Attached to the slider so callers can
+    use ``readout_label``, ``refresh_readout()`` and ``set_readout_suffix()``.
+    """
+    label = QLabel("")
+    label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    label.setStyleSheet(_small_text_css(CAPTION_SIZE, VALUE_ALPHA))
+    label.setMinimumWidth(56)
+
+    slider.readout_label = label
+    slider.readout_suffix = suffix
+    slider.readout_formatter = formatter if formatter is not None else (lambda v: str(v))
+
+    def _refresh(*_args):
+        text = str(slider.readout_formatter(slider.value()))
+        if slider.readout_suffix:
+            text = f"{text} {slider.readout_suffix}"
+        label.setText(text)
+
+    def _set_suffix(new_suffix: str):
+        slider.readout_suffix = new_suffix
+        _refresh()
+
+    slider.refresh_readout = _refresh
+    slider.set_readout_suffix = _set_suffix
+    slider.valueChanged.connect(_refresh)
+    _refresh()
+    return label
+
+
+def _version_line() -> str:
+    """About version line, resolved from the same source as the updater."""
+    try:
+        version = str(get_current_version() or "").strip()
+    except Exception:
+        version = ""
+    if version and version != "0.0.0":  # update_checker.DEFAULT_VERSION
+        return f"Version {version} (Fluent Edition)"
+    return "Version unknown (development build)"
 
 
 # ─── Sidebar Nav Button ────────────────────────────────────────────
@@ -96,20 +159,38 @@ class _SettingRow(QFrame):
         """)
         lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         row.addWidget(lbl)
+
+        # Sliders built by _make_slider carry a numeric readout; keep it
+        # between the label and the control so values line up per row.
+        readout = getattr(control, "readout_label", None)
+        if readout is not None:
+            row.addWidget(readout)
         row.addWidget(control)
         layout.addLayout(row)
 
+        self.label_widget = lbl
         if description:
-            desc = QLabel(description)
-            desc.setStyleSheet(f"""
-                QLabel {{
-                    color: rgba(255,255,255,120);
-                    font-family: {FONT_FAMILY}, Segoe UI;
-                    font-size: 11px;
-                }}
-            """)
-            desc.setWordWrap(True)
-            layout.addWidget(desc)
+            self.description_widget = self._make_description(description)
+            layout.addWidget(self.description_widget)
+        else:
+            self.description_widget = None
+
+    def _make_description(self, text: str) -> QLabel:
+        desc = QLabel(text)
+        desc.setStyleSheet(_small_text_css(CAPTION_SIZE, SECONDARY_ALPHA))
+        desc.setWordWrap(True)
+        return desc
+
+    def set_text(self, label: str, description: str | None = None):
+        """Update the row's copy in place (used by mode-dependent rows)."""
+        self.label_widget.setText(label)
+        if description is None:
+            return
+        if self.description_widget is None:
+            self.description_widget = self._make_description(description)
+            self.layout().addWidget(self.description_widget)
+        else:
+            self.description_widget.setText(description)
 
 
 # ─── Styled Controls ───────────────────────────────────────────────
@@ -142,7 +223,8 @@ def _make_combo(items: list[str], current: str = None) -> QComboBox:
     return cb
 
 
-def _make_slider(min_v: int, max_v: int, current: int, suffix: str = "") -> QSlider:
+def _make_slider(min_v: int, max_v: int, current: int, suffix: str = "",
+                 formatter=None) -> QSlider:
     s = QSlider(Qt.Orientation.Horizontal)
     s.setRange(min_v, max_v)
     s.setValue(current)
@@ -165,6 +247,7 @@ def _make_slider(min_v: int, max_v: int, current: int, suffix: str = "") -> QSli
             border-radius: 2px;
         }
     """)
+    _attach_readout(s, suffix=suffix, formatter=formatter)
     return s
 
 
@@ -229,7 +312,7 @@ class _GeneralPage(QWidget):
         self.auto_hide_cb.toggled.connect(self._on_change)
 
         # Auto-hide timeout
-        self.timeout_slider = _make_slider(1, 30, int(cfg.get("auto_hide_timeout", 5)))
+        self.timeout_slider = _make_slider(1, 30, int(cfg.get("auto_hide_timeout", 5)), suffix="s")
         layout.addWidget(_SettingRow(
             "Auto-Hide Timeout", self.timeout_slider,
             "Seconds of silence before hiding."
@@ -263,7 +346,7 @@ class _GeneralPage(QWidget):
         layout.addWidget(_SectionHeader("Taskbar"))
 
         # Visualizer height
-        self.height_slider = _make_slider(20, 80, cfg.get("visualizer_height", 40))
+        self.height_slider = _make_slider(20, 80, cfg.get("visualizer_height", 40), suffix="px")
         layout.addWidget(_SettingRow(
             "Visualizer Height (px)", self.height_slider,
             "Height of the visualizer strip in pixels."
@@ -361,15 +444,9 @@ class _VisualizerPage(QWidget):
         ))
         self.bar_count_slider.valueChanged.connect(self._on_change)
 
-        # Width %
-        self.width_slider = _make_slider(10, 100, cfg.get("width_percent", 40))
-        layout.addWidget(_SettingRow(
-            "Width %", self.width_slider,
-            "Percentage of taskbar width the visualizer occupies."
-        ))
-        self.width_slider.valueChanged.connect(self._on_change)
+        # Width & Position — Width Mode decides what the width value means
+        layout.addWidget(_SectionHeader("Width & Position"))
 
-        # Width Mode
         width_mode = cfg.get("width_mode", "auto")
         width_mode_text = {"auto": "Auto (empty space)", "percentage": "Percentage", "fixed": "Fixed pixels"}.get(width_mode, "Auto (empty space)")
         self.width_mode_combo = _make_combo(["Auto (empty space)", "Percentage", "Fixed pixels"], width_mode_text)
@@ -377,7 +454,11 @@ class _VisualizerPage(QWidget):
             "Width Mode", self.width_mode_combo,
             "Auto: detect empty space. Percentage: % of taskbar. Fixed: exact pixels."
         ))
-        self.width_mode_combo.currentIndexChanged.connect(self._on_change)
+
+        self.width_slider = _make_slider(10, 100, cfg.get("width_percent", 40))
+        self.width_row = _SettingRow("Width %", self.width_slider, "")
+        layout.addWidget(self.width_row)
+        self.width_slider.valueChanged.connect(self._on_change)
 
         # Alignment Hint
         alignment_hint = cfg.get("alignment_hint", "left")
@@ -389,13 +470,12 @@ class _VisualizerPage(QWidget):
         ))
         self.alignment_combo.currentIndexChanged.connect(self._on_change)
 
-        # Sensitivity
-        self.sens_combo = _make_combo(["Low", "Medium", "High"],
-            {0.5: "Low", 1.0: "Medium", 2.0: "High"}.get(cfg.get("sensitivity", 1.0), "Medium"))
-        layout.addWidget(_SettingRow("Sensitivity", self.sens_combo))
-        self.sens_combo.currentIndexChanged.connect(self._on_change)
+        self.width_mode_combo.currentIndexChanged.connect(self._on_width_mode_change)
+        self._update_width_row()
 
-        # Toggles
+        # Effects
+        layout.addWidget(_SectionHeader("Effects"))
+
         self.glow_cb = _make_checkbox(cfg.get("glow", True))
         layout.addWidget(_SettingRow("Glow Effect", self.glow_cb, "Adds soft halo around bars."))
         self.glow_cb.toggled.connect(self._on_change)
@@ -408,12 +488,91 @@ class _VisualizerPage(QWidget):
         layout.addWidget(_SettingRow("Peak Caps", self.peak_cb, "Shows a cap at the highest point."))
         self.peak_cb.toggled.connect(self._on_change)
 
+        # Response & Emphasis — rendering-response values (Bass Boost and
+        # Peak Decay used to sit on the Themes page).
+        layout.addWidget(_SectionHeader("Response & Emphasis"))
+
+        self._sensitivity_map = {"Low": 0.5, "Medium": 1.0, "High": 2.0}
+        try:
+            self._sensitivity_value = float(cfg.get("sensitivity", 1.0))
+        except (TypeError, ValueError):
+            self._sensitivity_value = 1.0
+        current_sens = next(
+            (
+                name
+                for name, value in self._sensitivity_map.items()
+                if value == self._sensitivity_value
+            ),
+            "Medium",
+        )
+        self.sens_combo = _make_combo(["Low", "Medium", "High"], current_sens)
+        layout.addWidget(_SettingRow(
+            "Sensitivity", self.sens_combo,
+            "Scales the overall spectrum level before drawing."
+        ))
+        self.sens_combo.currentIndexChanged.connect(self._on_sensitivity_change)
+
+        self.boost_slider = _make_slider(
+            80, 200, int(cfg.get("low_end_boost", 1.35) * 100),
+            formatter=lambda value: f"{value / 100.0:.2f}",
+        )
+        layout.addWidget(_SettingRow("Bass Boost", self.boost_slider,
+            "Emphasize low frequencies (default 1.35; 1.00 = flat)."))
+        self.boost_slider.valueChanged.connect(self._on_change)
+
+        self.decay_slider = _make_slider(
+            10, 100, int(cfg.get("peak_hold_decay", 0.045) * 1000),
+            formatter=lambda value: f"{value / 1000.0:.3f}",
+        )
+        layout.addWidget(_SettingRow("Peak Decay Speed", self.decay_slider,
+            "How quickly peak caps fall (default 0.045). Lower = slower."))
+        self.decay_slider.valueChanged.connect(self._on_change)
+
         layout.addStretch()
+
+    # Copy per Width Mode: same slider, same stored key, different meaning.
+    _WIDTH_COPY = {
+        "Auto (empty space)": (
+            "Width %",
+            "Percent of taskbar width; used only when no empty space is detected.",
+            "%",
+        ),
+        "Percentage": (
+            "Width %",
+            "Percentage of taskbar width the visualizer occupies.",
+            "%",
+        ),
+        "Fixed pixels": (
+            "Width (px)",
+            "Exact width in pixels (10-100).",
+            "px",
+        ),
+    }
 
     def _on_mode_change(self, idx):
         if 0 <= idx < len(self._mode_ids):
             self.cfg["mode"] = self._mode_ids[idx]
             self.config_changed.emit(self.cfg)
+
+    def _update_width_row(self):
+        """Relabel the width row so its unit matches the selected Width Mode."""
+        label, description, suffix = self._WIDTH_COPY.get(
+            self.width_mode_combo.currentText(), self._WIDTH_COPY["Percentage"]
+        )
+        self.width_row.set_text(label, description)
+        self.width_slider.set_readout_suffix(suffix)
+
+    def _on_width_mode_change(self, *args):
+        self._update_width_row()
+        self._on_change(*args)
+
+    def _on_sensitivity_change(self, *args):
+        # Only an explicit pick overwrites the stored value, so an unrelated
+        # edit keeps a sensitivity that is not Low/Medium/High.
+        self._sensitivity_value = self._sensitivity_map.get(
+            self.sens_combo.currentText(), 1.0
+        )
+        self._on_change(*args)
 
     def _on_change(self, *args):
         self.cfg["bar_count"] = self.bar_count_slider.value()
@@ -422,11 +581,12 @@ class _VisualizerPage(QWidget):
         self.cfg["width_mode"] = width_mode_map.get(self.width_mode_combo.currentText(), "auto")
         alignment_map = {"Left": "left", "Center": "center"}
         self.cfg["alignment_hint"] = alignment_map.get(self.alignment_combo.currentText(), "left")
-        sens_map = {"Low": 0.5, "Medium": 1.0, "High": 2.0}
-        self.cfg["sensitivity"] = sens_map.get(self.sens_combo.currentText(), 1.0)
+        self.cfg["sensitivity"] = self._sensitivity_value
         self.cfg["glow"] = self.glow_cb.isChecked()
         self.cfg["beat_flash"] = self.beat_cb.isChecked()
         self.cfg["peak_caps_enabled"] = self.peak_cb.isChecked()
+        self.cfg["low_end_boost"] = self.boost_slider.value() / 100.0
+        self.cfg["peak_hold_decay"] = self.decay_slider.value() / 1000.0
         self.config_changed.emit(self.cfg)
 
 
@@ -446,7 +606,10 @@ class _ThemesPage(QWidget):
         theme_items = [THEME_DISPLAY.get(t, t) for t in THEME_NAMES]
         current = THEME_DISPLAY.get(cfg.get("theme", "cyan"), "Cyan")
         self.theme_combo = _make_combo(theme_items, current)
-        layout.addWidget(_SettingRow("Color Theme", self.theme_combo))
+        layout.addWidget(_SettingRow(
+            "Color Theme", self.theme_combo,
+            "Palette for bars and glow; Album Art follows the current track."
+        ))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_change)
 
         # Gradient mode
@@ -455,18 +618,6 @@ class _ThemesPage(QWidget):
         layout.addWidget(_SettingRow("Gradient Mode", self.grad_combo,
             "Adds color gradient transitions across bars."))
         self.grad_combo.currentIndexChanged.connect(self._on_gradient_change)
-
-        # Low end boost
-        self.boost_slider = _make_slider(80, 200, int(cfg.get("low_end_boost", 1.35) * 100))
-        layout.addWidget(_SettingRow("Bass Boost", self.boost_slider,
-            "Emphasize low frequencies (100 = default)."))
-        self.boost_slider.valueChanged.connect(self._on_change)
-
-        # Peak hold decay
-        self.decay_slider = _make_slider(10, 100, int(cfg.get("peak_hold_decay", 0.045) * 1000))
-        layout.addWidget(_SettingRow("Peak Decay Speed", self.decay_slider,
-            "How quickly peak caps fall. Lower = slower."))
-        self.decay_slider.valueChanged.connect(self._on_change)
 
         # Custom theme color picker section
         layout.addWidget(_SectionHeader("Custom Theme"))
@@ -505,11 +656,6 @@ class _ThemesPage(QWidget):
         if 0 <= idx < len(modes):
             self.cfg["gradient_mode"] = modes[idx]
             self.config_changed.emit(self.cfg)
-
-    def _on_change(self, *args):
-        self.cfg["low_end_boost"] = self.boost_slider.value() / 100.0
-        self.cfg["peak_hold_decay"] = self.decay_slider.value() / 1000.0
-        self.config_changed.emit(self.cfg)
 
     def _pick_color(self, key: str, btn: QPushButton):
         color = QColorDialog.getColor(parent=self)
@@ -555,16 +701,24 @@ class _AudioPage(QWidget):
         self.fft_combo = _make_combo(["2048", "4096", "8192"],
                                      str(cfg.get("fft_size", 2048)))
         layout.addWidget(_SettingRow("FFT Size", self.fft_combo,
-            "Larger = finer frequency resolution, more latency."))
+            "Larger values reveal finer detail but smooth transients over a longer window."))
         self.fft_combo.currentIndexChanged.connect(self._on_change)
 
+        self.hop_combo = _make_combo(["512", "1024", "2048"],
+                                     str(cfg.get("capture_hop", 1024)))
+        layout.addWidget(_SettingRow("Response Speed", self.hop_combo,
+            "New samples per update: 512 is fastest; 2048 uses less CPU."))
+        self.hop_combo.currentIndexChanged.connect(self._on_change)
+
         # Frequency range
-        self.freq_min_slider = _make_slider(20, 200, cfg.get("freq_min", 40))
-        layout.addWidget(_SettingRow("Min Frequency (Hz)", self.freq_min_slider))
+        self.freq_min_slider = _make_slider(20, 200, cfg.get("freq_min", 40), suffix="Hz")
+        layout.addWidget(_SettingRow("Min Frequency (Hz)", self.freq_min_slider,
+            "Lowest frequency shown."))
         self.freq_min_slider.valueChanged.connect(self._on_change)
 
-        self.freq_max_slider = _make_slider(4000, 20000, cfg.get("freq_max", 16000))
-        layout.addWidget(_SettingRow("Max Frequency (Hz)", self.freq_max_slider))
+        self.freq_max_slider = _make_slider(4000, 20000, cfg.get("freq_max", 16000), suffix="Hz")
+        layout.addWidget(_SettingRow("Max Frequency (Hz)", self.freq_max_slider,
+            "Highest frequency shown."))
         self.freq_max_slider.valueChanged.connect(self._on_change)
 
         # Band isolation
@@ -579,6 +733,7 @@ class _AudioPage(QWidget):
     def _on_change(self, *args):
         self.cfg["use_microphone"] = self.input_combo.currentIndex() == 1
         self.cfg["fft_size"] = int(self.fft_combo.currentText())
+        self.cfg["capture_hop"] = int(self.hop_combo.currentText())
         self.cfg["freq_min"] = self.freq_min_slider.value()
         self.cfg["freq_max"] = self.freq_max_slider.value()
         self.cfg["isolate_bass"] = self.bass_cb.isChecked()
@@ -605,7 +760,7 @@ class _MediaPage(QWidget):
         self.show_overlay_cb.toggled.connect(self._on_change)
 
         # Overlay duration
-        self.duration_slider = _make_slider(1, 10, int(cfg.get("media_overlay_duration", 3.5)))
+        self.duration_slider = _make_slider(1, 10, int(cfg.get("media_overlay_duration", 3.5)), suffix="s")
         layout.addWidget(_SettingRow("Overlay Duration (s)", self.duration_slider,
             "How long the now-playing card stays visible."))
         self.duration_slider.valueChanged.connect(self._on_change)
@@ -619,12 +774,14 @@ class _MediaPage(QWidget):
         # Position
         self.pos_combo = _make_combo(["Left", "Center", "Right"],
             mcfg.get("position", "center").capitalize())
-        layout.addWidget(_SettingRow("Controls Position", self.pos_combo))
+        layout.addWidget(_SettingRow("Controls Position", self.pos_combo,
+            "Where the transport buttons sit inside the overlay."))
         self.pos_combo.currentIndexChanged.connect(self._on_change)
 
         # Button size
-        self.size_slider = _make_slider(20, 60, mcfg.get("size", 36))
-        layout.addWidget(_SettingRow("Button Size", self.size_slider))
+        self.size_slider = _make_slider(20, 60, mcfg.get("size", 36), suffix="px")
+        layout.addWidget(_SettingRow("Button Size", self.size_slider,
+            "Diameter of each transport button in pixels."))
         self.size_slider.valueChanged.connect(self._on_change)
 
         layout.addStretch()
@@ -651,7 +808,7 @@ class _AboutPage(QWidget):
 
         info = QLabel(
             "Audio Visualizer\n"
-            "Version 2.0 (Fluent Edition)\n\n"
+            f"{_version_line()}\n\n"
             "A taskbar audio visualizer with Fluent 2 design,\n"
             "media integration, and multiple visualization modes.\n\n"
             "Built with PyQt6, NumPy, and SoundCard.\n"
@@ -666,6 +823,7 @@ class _AboutPage(QWidget):
             }}
         """)
         info.setWordWrap(True)
+        self.info_label = info
         layout.addWidget(info)
 
         # Mode list
@@ -690,6 +848,38 @@ class _AboutPage(QWidget):
         modes_lbl.setWordWrap(True)
         layout.addWidget(modes_lbl)
         layout.addStretch()
+
+
+# ─── Scroll Container ──────────────────────────────────────────────
+
+class _ScrollContent(QWidget):
+    """Scroll-area body whose minimum height tracks the visible page.
+
+    The setting pages live directly in this widget's layout and only the
+    current one is shown. Height comes from that page's size hint so
+    word-wrapped descriptions are counted; a QStackedWidget would pin the
+    minimum to the tallest page, which keeps a scrollbar (and blank space)
+    alive on short pages such as Themes or About.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_page = None
+
+    def set_current_page(self, page: QWidget):
+        self._current_page = page
+
+    def minimumSizeHint(self):
+        base = super().minimumSizeHint()
+        page = self._current_page
+        if page is None:
+            return base
+        layout = self.layout()
+        extra = 0
+        if layout is not None:
+            margins = layout.contentsMargins()
+            extra = margins.top() + margins.bottom()
+        return QSize(base.width(), int(page.sizeHint().height()) + extra)
 
 
 # ─── Main Settings Window ──────────────────────────────────────────
@@ -767,40 +957,51 @@ class SettingsWindow(QWidget):
         sidebar_layout.addStretch()
         card_layout.addWidget(sidebar)
 
-        # ─── Content Stack ────────────────────────────────────────
-        self._stack = QStackedWidget()
+        # ─── Content Pages ────────────────────────────────────────
         self._pages = {}
 
         general = _GeneralPage(self.cfg)
         general.config_changed.connect(self._on_config_changed)
         self._pages["General"] = general
-        self._stack.addWidget(general)
 
         visualizer = _VisualizerPage(self.cfg)
         visualizer.config_changed.connect(self._on_config_changed)
         self._pages["Visualizer"] = visualizer
-        self._stack.addWidget(visualizer)
 
         themes = _ThemesPage(self.cfg)
         themes.config_changed.connect(self._on_config_changed)
         self._pages["Themes"] = themes
-        self._stack.addWidget(themes)
 
         audio = _AudioPage(self.cfg)
         audio.config_changed.connect(self._on_config_changed)
         self._pages["Audio"] = audio
-        self._stack.addWidget(audio)
 
         media = _MediaPage(self.cfg)
         media.config_changed.connect(self._on_config_changed)
         self._pages["Media"] = media
-        self._stack.addWidget(media)
 
         about = _AboutPage()
         self._pages["About"] = about
-        self._stack.addWidget(about)
 
-        card_layout.addWidget(self._stack)
+        # Scrollable body: keeps every row reachable in small windows and
+        # adds a consistent gutter between content and the sidebar/window edge.
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        content = _ScrollContent()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_XL)
+        content_layout.setSpacing(0)
+        for page in self._pages.values():
+            content_layout.addWidget(page)
+            page.hide()
+        scroll.setWidget(content)
+
+        self._content = content
+        self._scroll_area = scroll
+        card_layout.addWidget(scroll)
 
         # Default to first nav item
         self._navigate("General")
@@ -810,8 +1011,14 @@ class SettingsWindow(QWidget):
             is_active = self.NAV_ITEMS[i][0] == label
             btn._update_style(is_active)
             btn.setChecked(is_active)
-        if label in self._pages:
-            self._stack.setCurrentWidget(self._pages[label])
+        page = self._pages.get(label)
+        if page is None:
+            return
+        for candidate in self._pages.values():
+            candidate.setVisible(candidate is page)
+        self._content.set_current_page(page)
+        # A switched-to page starts at its top instead of a stale offset.
+        self._scroll_area.verticalScrollBar().setValue(0)
 
     def _on_config_changed(self, cfg: dict):
         self.cfg = cfg

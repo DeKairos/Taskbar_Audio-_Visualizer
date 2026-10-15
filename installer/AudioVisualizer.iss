@@ -56,4 +56,10 @@ Name: "{autodesktop}\Audio Visualizer"; Filename: "{app}\{#MyAppExeName}"; Tasks
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Audio Visualizer"; Flags: nowait postinstall skipifsilent
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AudioVisualizer"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startup; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AudioVisualizer"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startup; Flags: uninsdeletevalue; Check: not IsUpdateInstall
+
+[Code]
+function IsUpdateInstall: Boolean;
+begin
+  Result := ExpandConstant('{param:UPDATE|0}') = '1';
+end;

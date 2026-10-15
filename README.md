@@ -27,7 +27,7 @@ A real-time **Windows taskbar audio visualizer** built with PyQt6. Displays anim
 ✅ **Persistent Click-Through + Topmost** — Visualizer never blocks taskbar clicks and stays above taskbar
 ✅ **Dynamic Coloring** — Album art colors override theme in real-time
 ✅ **Beat Detection** — Flash effect synced to bass frequencies
-✅ **Smooth Animations** — 33 FPS rendering with fast attack/slow decay
+✅ **Smooth Animations** — ~60 FPS animation scheduling with fast attack/slow decay
 ✅ **Glow Effects** — Radial gradients for depth and luminosity
 ✅ **Now-Playing Display** — Full now-playing card (title + artist/album) auto-shows once, then is click-triggered
 ✅ **Auto-Start** — Registry integration to run with Windows
@@ -81,10 +81,10 @@ audio_visualizer/
 
 - Runs on dedicated thread with COM initialization for Windows Media Foundation
 - Finds system loopback device matching default speaker
-- Captures 44.1 kHz audio, 4096-sample blocks
+- Captures 44.1 kHz audio in 1024-sample hops by default; analyzes overlapping 2048-sample windows
 - Applies Hann windowing for clean FFT
 - Computes real FFT, converts to dB scale, normalizes
-- Buckets frequency bins into 64 bars (configurable)
+- Maps frequencies into 64 logarithmic bands (configurable), preserving peaks
 - Emits via Qt signal
 
 #### `input_hooks.py`
@@ -103,14 +103,13 @@ audio_visualizer/
 - Fetches now-playing: title, artist, album, album art
 - Extracts dominant color from album art thumbnail
 - Runs async in background thread
-- **Color Extraction**: Resizes image to 50x50, sorts pixels by brightness, averages top 30%
+- **Color Extraction**: Samples a thumbnail, ignores transparency and tiny details, and favors substantial colorful regions over white borders
 
 #### `tray_manager.py`
 
 - Creates system tray icon (cyan circle)
-- Builds context menu with all controls
-- Handles theme selection, mode changes, sensitivity, width adjustments
-- Toggles effects (glow, beat flash, auto-hide)
+- Builds context menu with four actions: **Settings...**, **Show/Hide Visualizer** (state-dependent), **Check for updates**, **Quit**
+- Opens Settings window for mode, theme, sensitivity, width, and effect toggles
 - Manages Windows startup registry for auto-launch
 - Triggers config saves on every change
 
@@ -142,7 +141,7 @@ FFT Processing → Qt Signal (bars array)
     ↓
 Smooth + Normalize
     ↓
-[_tick()] timer (33 fps)
+[_tick()] timer (16 ms)
     ↓
 paintEvent()
     ↓
@@ -209,27 +208,19 @@ user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0)
 
 #### FFT Pipeline
 
-1. **Capture**: 44.1 kHz, 16-bit stereo, 4096-sample blocks
-2. **Mix to Mono**: Average L/R channels
-3. **Window**: Apply Hann window for spectral leakage reduction
-4. **FFT**: `np.fft.rfft()` → real FFT (efficient for real signals)
-5. **Magnitude**: `np.abs()` to get frequency magnitudes
-6. **dB Scale**: `20 * log10(x + 1e-6)` → decibel conversion
-7. **Normalize**: Clip to [0, ∞), scale to [0, 1] for rendering
-8. **Bucket**: Average frequency bins into 64 visualization bars
+1. Capture system audio or microphone samples at 44.1 kHz.
+2. Feed a rolling analysis window with new chunks of 512, 1024, or 2048 samples.
+3. Apply a Hann, Hamming, or Blackman window and compute a separate FFT per channel.
+4. Combine channel energy after FFT so opposite-phase stereo does not cancel.
+5. Normalize window gain, convert to dB, and map into logarithmic bands.
+6. Preserve band peaks; interpolate bands below FFT resolution instead of shifting their frequencies.
+7. Apply display compensation and emit the spectrum to the UI.
 
-#### Smoothing
+`core/spectrum.py` owns device-independent analysis. Audio settings let you choose FFT detail separately from response speed. The default 1024-sample hop gives about 43 updates per second; this is the analysis cadence, not measured end-to-end latency.
 
-- **Fast Attack**: `smoothed = smoothed * 0.3 + scaled * 0.7`
-- **Slow Decay**: `smoothed = smoothed * 0.8 + scaled * 0.2`
-- Creates natural visual feel with responsive peaks and gradual falls
+#### Smoothing and Beat Detection
 
-#### Beat Detection
-
-- Track bass energy (mean of first 6 bins)
-- Keep history of last 30 frames
-- If `current_bass > average_bass * 1.8` and `current_bass > 5.0` → flash
-- Flash decays at 0.06 per frame (~5 frame duration)
+Attack, decay, peak caps, and level reference use elapsed time so changing response speed does not change their timing. Beat pulses compare low-band energy with a 1.4-second history. Sustained tones remain visible; identical spectra are not treated as silence.
 
 ### Color Interpolation
 
@@ -253,26 +244,11 @@ def bar_color(theme, norm, index, total):
 
 ### Album Art Color Extraction
 
-```python
-# Extract dominant color from album art thumbnail
-img = Image.open(io.BytesIO(thumbnail_bytes)).convert("RGB")
-img = img.resize((50, 50))  # Small for speed
-pixels = list(img.getdata())
+`color_themes.artwork_accent()` samples artwork at up to 64×64 pixels and groups similar colors. Substantial saturated regions take priority over white borders and tiny bright details. Monochrome artwork stays neutral, with a brightness floor for visibility.
 
-# Sort by brightness, take top 30%
-pixels.sort(key=lambda p: sum(p), reverse=True)
-top = pixels[:max(1, len(pixels) // 3)]
+The selected hue produces coordinated base, peak, glow, and background colors. Palette changes crossfade over 450 ms; a track change during a fade starts from the color currently displayed. Static themes continue to use their selected palette.
 
-# Average the top pixels
-r = sum(p[0] for p in top) // len(top)
-g = sum(p[1] for p in top) // len(top)
-b = sum(p[2] for p in top) // len(top)
-
-# Ensure minimum saturation & brightness
-if max(r,g,b) < 80:
-    scale = 80 / max(r,g,b)
-    r, g, b = int(r*scale), int(g*scale), int(b*scale)
-```
+Media metadata and artwork are published together as a complete snapshot. Tracks without artwork return to the default dynamic palette rather than retaining the previous cover's accent. Switching players with identical track metadata also refreshes the snapshot.
 
 ## Dependencies
 
@@ -400,32 +376,34 @@ When a tag matching `v*` is pushed, the `Release on Tag` workflow automatically 
 
 ## Performance
 
-### Resource Usage
+### Rendering and Capture
 
-- **CPU**: ~2-5% (mostly FFT, rendering at 33 fps)
-- **Memory**: ~80-120 MB (PyQt + dependencies)
-- **GPU**: Minimal (Qt uses CPU rendering by default)
+- Animation is scheduled every 16 ms with QPainter; actual frame rate depends on the machine and mode.
+- Dynamic quality reduces effects when measured paint time increases.
+- Capture hop defaults to 1024 samples (~23 ms). FFT windows remain independently configurable at 2048, 4096, or 8192 samples.
+- Media information is polled every 2 seconds; taskbar visibility and placement every 500 ms.
+- CPU, memory, and end-to-end audio latency need hardware benchmarking before publishing performance claims.
 
-### Optimization Notes
+### Verification
 
-- FFT at 4096 samples = ~93 ms latency (acceptable for visual sync)
-- 33 fps refresh rate ≈ 30 ms per frame (smooth on 60+ Hz displays)
-- Smooth interpolation hides frame drops under 10 ms
-- Media monitoring runs every 2s (low-impact polling)
-- Volume hook runs in separate thread (non-blocking)
+```powershell
+.\venv_win\Scripts\python.exe -m pytest tests/ -q
+```
+
+Tests cover generated audio signals, opposite-phase stereo, overlapping windows, FFT-size gain, sustained audio, repeated settings edits, mode persistence, and simulated taskbar layouts. Theme tests use temporary storage. CI checks the five supported modes, and tagged releases run tests before packaging.
 
 ## Known Limitations
 
 ⚠️ **Windows-Only**: Uses Win32 APIs and Windows Media Foundation
-⚠️ **No Direct Audio Input**: Only captures system audio via loopback (no microphone)
-⚠️ **Taskbar Height Fixed**: Assumes standard 40-48 px taskbar
+⚠️ **Audio Sources**: System loopback and the default microphone are supported; per-application audio capture is not yet supported.
+⚠️ **Taskbar Layout**: Native taskbar rectangles and per-display scaling are used. Custom shell layouts and missing child-window information may require manual width/alignment.
 ⚠️ **Album Art Extraction**: Depends on app providing thumbnail (Spotify, Windows Media Player work; browser players may not)
 ⚠️ **Now-Playing Trigger**: Intro card auto-shows once, then requires click over visualizer area
-⚠️ **No Multi-Monitor**: Visualizer only works on primary screen
+⚠️ **Multi-Monitor**: One selected display is supported. Taskbars are matched by display name; mixed-DPI and secondary-display layouts have simulated regression coverage and still need hardware validation.
 
 ## Future Ideas
 
-- [ ] Direct audio input from microphone
+- [x] Direct audio input from the default microphone
 - [ ] Preset animations (starfield, kaleidoscope, etc.)
 - [ ] EQ presets (bass boost, treble lift, etc.)
 - [ ] Recording visualizer + audio to video
@@ -447,11 +425,3 @@ Built on Windows 10/11 with Python 3.10+
 ---
 
 **Questions?** Check [developers/setup/QUICKSTART.md](developers/setup/QUICKSTART.md) for setup instructions or review component code for implementation details.
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r sentimental_analysis_ML/instagram-sentiment/requirements.txt
-streamlit run sentimental_analysis_ML/instagram-sentiment/app.pypython -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r sentimental_analysis_ML/instagram-sentiment/requirements.txt
-python -m nltk.downloader vader_lexicon
-python -m streamlit run sentimental_analysis_ML/instagram-sentiment/app.py

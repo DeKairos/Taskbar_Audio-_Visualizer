@@ -3,17 +3,43 @@ tray_manager.py — System tray icon with controls for the visualizer.
 """
 import os
 import time
-import subprocess
-import tempfile
-import urllib.request
+import json
+from pathlib import Path
+import threading
+from copy import deepcopy
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QMessageBox, QApplication, QProgressDialog
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QAction
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, QObject, pyqtSignal
 from config_manager import save_config, set_startup, audio_config_changed
 from color_themes import THEME_NAMES, THEME_DISPLAY
 from update_checker import check_for_updates
 from app_resources import get_app_icon
+from app_updater import installation_kind, select_update_asset, stage_update, launch_update, load_pending_update, RESULT_PATH
 from audio_capture import AudioCaptureThread
+
+
+class _UpdateWorker(QObject):
+    completed = pyqtSignal(dict)
+    progress = pyqtSignal(object, object)
+
+    def __init__(self, task, parent):
+        super().__init__(parent)
+        self.task = task
+        self.cancel = threading.Event()
+
+    def start(self):
+        # A stalled network request must not keep the application alive on exit.
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            result = self.task(self.progress.emit, self.cancel)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        try:
+            self.completed.emit(result)
+        except RuntimeError:
+            pass  # Application has already destroyed its Qt objects.
 
 
 class TrayManager(QSystemTrayIcon):
@@ -40,10 +66,25 @@ class TrayManager(QSystemTrayIcon):
         self.audio_thread = audio_thread
         self.cfg = config
         self._shutting_down = False
+        self._check_worker = None
+        self._download_worker = None
+        self._ready_update = load_pending_update(self.cfg.get("pending_update"))
+        if not self._ready_update:
+            self.cfg.pop("pending_update", None)
+        self._update_process = None
+        self._next_update_retry = 0.0
+        self._tray_was_available = False
 
         self.setToolTip("Audio Visualizer")
         self._build_menu()
         self._schedule_auto_update_check()
+        self.activated.connect(self._on_tray_activated)
+        self.messageClicked.connect(self._on_update_action)
+        self._tray_timer = QTimer(self)
+        self._tray_timer.timeout.connect(self._ensure_tray_visible)
+        self._tray_timer.start(3000)
+        QTimer.singleShot(0, self._ensure_tray_visible)
+        QTimer.singleShot(1000, self._show_update_outcome)
 
     def _build_menu(self):
         menu = QMenu()
@@ -52,12 +93,18 @@ class TrayManager(QSystemTrayIcon):
         settings_action = QAction("\u2699 Settings...", menu)
         settings_action.triggered.connect(self._open_settings)
         menu.addAction(settings_action)
-        self.toggle_action = QAction("Hide Visualizer", menu)
+        # Label follows saved visibility, including the first build after a
+        # restart with the visualizer hidden.
+        visible = bool(self.cfg.get("enabled", True))
+        self.toggle_action = QAction(
+            "Hide Visualizer" if visible else "Show Visualizer", menu
+        )
         self.toggle_action.triggered.connect(self._toggle_vis)
         menu.addAction(self.toggle_action)
 
-        self.check_updates_action = QAction("Check for updates", menu)
-        self.check_updates_action.triggered.connect(self._check_for_updates)
+        self.check_updates_action = QAction("Restart to update" if self._ready_update else "Check for updates", menu)
+        self.check_updates_action.setEnabled(not (self._check_worker or self._download_worker))
+        self.check_updates_action.triggered.connect(self._on_update_action)
         menu.addAction(self.check_updates_action)
 
         menu.addSeparator()
@@ -66,7 +113,11 @@ class TrayManager(QSystemTrayIcon):
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
 
+        old_menu = getattr(self, "_menu", None)
+        self._menu = menu  # QSystemTrayIcon does not own the menu.
         self.setContextMenu(menu)
+        if old_menu:
+            old_menu.deleteLater()
 
     # ─── Actions ────────────────────────────────────────────────────
 
@@ -86,6 +137,7 @@ class TrayManager(QSystemTrayIcon):
         try:
             from ui.settings_window import SettingsWindow
             if not hasattr(self, "_settings_win") or self._settings_win is None:
+                self._settings_snapshot = deepcopy(self.cfg)
                 self._settings_win = SettingsWindow(self.cfg)
                 self._settings_win.config_changed.connect(self._on_settings_changed)
             self._settings_win.show()
@@ -97,9 +149,15 @@ class TrayManager(QSystemTrayIcon):
     def _on_settings_changed(self, cfg: dict):
         """Called when settings window changes config."""
         previous_cfg = self.cfg
-        self.cfg = cfg
+        # Settings pages mutate their working dictionary before emitting again.
+        # Keep the applied snapshot separate so subsequent audio changes compare correctly.
+        snapshot = getattr(self, "_settings_snapshot", previous_cfg)
+        changes = {key: deepcopy(value) for key, value in cfg.items()
+                   if key not in snapshot or value != snapshot[key]}
+        self._settings_snapshot = deepcopy(cfg)
+        self.cfg = deepcopy(previous_cfg) | changes
         self.vis.apply_config(self.cfg)
-        if audio_config_changed(previous_cfg, cfg):
+        if audio_config_changed(previous_cfg, self.cfg):
             self._restart_audio_capture()
         self._save()
         # Rebuild tray menu to reflect changes
@@ -227,21 +285,60 @@ class TrayManager(QSystemTrayIcon):
     def _save(self):
         save_config(self.cfg)
 
+    def _ensure_tray_visible(self):
+        if self._shutting_down:
+            return
+        available = self.isSystemTrayAvailable()
+        if available and (not self._tray_was_available or not self.isVisible()):
+            self.hide()
+            if self.icon().pixmap(16, 16).isNull():
+                self.setIcon(get_app_icon())
+            self.show()
+        self._tray_was_available = available
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._open_settings()
+
+    def _show_update_outcome(self):
+        if self._shutting_down or not RESULT_PATH.exists():
+            return
+        try:
+            result = json.loads(RESULT_PATH.read_text(encoding="utf-8-sig"))
+            RESULT_PATH.unlink()
+        except (OSError, ValueError):
+            return
+        if not result.get("ok"):
+            self._ready_update = None
+            self.cfg.pop("pending_update", None)
+            self._save()
+            self._build_menu()
+            message = "The update could not be completed. "
+            message += ("Your previous version was restored." if result.get("recovered")
+                        else f"Your backup is available at {result.get('backup', '')}.")
+            QMessageBox.warning(self.vis, "Update", message + "\n\n" + str(result.get("error", "")))
+
     def _schedule_auto_update_check(self):
-        if not self.cfg.get("auto_update_check", True):
-            return
-
-        interval_hours = float(self.cfg.get("update_check_interval_hours", 24) or 24)
-        interval_seconds = max(1.0, interval_hours * 3600.0)
-        last_check = float(self.cfg.get("last_update_check_ts", 0.0) or 0.0)
-        if time.time() - last_check < interval_seconds:
-            return
-
-        # Delay startup check so app launch remains responsive.
+        self._auto_update_timer = QTimer(self)
+        self._auto_update_timer.timeout.connect(self._run_silent_startup_update_check)
+        self._auto_update_timer.start(60000)
         QTimer.singleShot(5000, self._run_silent_startup_update_check)
 
     def _run_silent_startup_update_check(self):
-        self._check_for_updates(silent_error=True, silent_no_update=True)
+        if not self.cfg.get("auto_update_check", True) or self._ready_update:
+            return
+        now = time.time()
+        interval = max(1.0, float(self.cfg.get("update_check_interval_hours", 24))) * 3600
+        due = max(float(self.cfg.get("last_update_check_ts", 0)) + interval,
+                  float(self.cfg.get("update_defer_until_ts", 0)), self._next_update_retry)
+        if now >= due:
+            self._check_for_updates(silent_error=True, silent_no_update=True)
+
+    def _on_update_action(self):
+        if self._ready_update:
+            self._restart_to_update()
+        else:
+            self._check_for_updates()
 
     def _get_release_notes_preview(self, notes: str, max_lines: int = 10, max_chars: int = 700) -> str:
         if not notes:
@@ -282,120 +379,132 @@ class TrayManager(QSystemTrayIcon):
         self.cfg["update_skip_version"] = ""
         self._save()
 
-    def _download_and_launch_installer(self, download_url: str, asset_name: str) -> bool:
-        if not download_url:
-            return False
-
-        def _fmt_mb(byte_count: int) -> str:
-            return f"{byte_count / (1024 * 1024):.1f} MB"
-
-        safe_name = os.path.basename(asset_name or "AudioVisualizer-Setup-latest.exe")
-        target_dir = os.path.join(tempfile.gettempdir(), "AudioVisualizerUpdates")
-        os.makedirs(target_dir, exist_ok=True)
-
-        installer_path = os.path.join(target_dir, safe_name)
-        partial_path = installer_path + ".part"
-        progress = None
-
+    def _download_update(self, asset, kind, version, automatic=False):
+        if self._download_worker or self._shutting_down or self._ready_update:
+            return
+        self._download_progress = QProgressDialog("Downloading update...", "Cancel", 0, 0, self.vis)
+        self._download_progress.setWindowTitle("Update")
+        self._download_progress.setMinimumDuration(0)
+        self._download_progress.setAutoClose(False)
+        self._download_progress.setAutoReset(False)
+        self._download_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self._download_automatic = automatic
+        if automatic:
+            self._download_progress.setMinimumDuration(2147483647)
+        worker = _UpdateWorker(
+            lambda progress, cancel: stage_update(asset, kind, version, progress, cancel), self
+        )
+        self._download_worker = worker
+        self._download_progress.canceled.connect(worker.cancel.set)
+        worker.progress.connect(self._on_download_progress)
+        worker.completed.connect(self._on_download_finished)
         self.check_updates_action.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        if not automatic:
+            self._download_progress.show()
+        worker.start()
 
+    def _on_download_progress(self, downloaded, total):
+        if self._shutting_down or self._download_worker.cancel.is_set():
+            return
+        dialog = self._download_progress
+        # Percent range avoids QProgressDialog's signed 32-bit byte limit.
+        dialog.setRange(0, 100 if total else 0)
+        if total:
+            dialog.setValue(min(100, int(downloaded * 100 / total)))
+        dialog.setLabelText(f"Downloading update... {downloaded / (1024 * 1024):.1f} MB")
+
+    def _on_download_finished(self, result):
+        worker = self._download_worker
+        self._download_worker = None
+        canceled = worker.cancel.is_set()
+        worker.deleteLater()
+        if self._shutting_down:
+            return
+        self._download_progress.close()
+        self._download_progress.deleteLater()
+        self.check_updates_action.setEnabled(not bool(self._check_worker))
+        if canceled or result.get("canceled"):
+            return
+        if not result.get("ok"):
+            if self._download_automatic:
+                self.showMessage("Update download failed", "The current app is unchanged. You can retry from the tray menu.")
+                return
+            QMessageBox.warning(self.vis, "Update", f"Could not download the installer.\n\nReason: {result.get('error')}")
+            return
+        self._ready_update = result
+        self.cfg["pending_update"] = result
+        self._save()
+        self._build_menu()
+        self.showMessage("Update ready", "Restart Audio Visualizer to finish updating.")
+        if self._download_automatic:
+            return
+        msg = QMessageBox(self.vis)
+        msg.setWindowTitle("Update ready")
+        msg.setText("The update has been downloaded and verified. Restart now to apply it?")
+        restart = msg.addButton("Restart to update", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() == restart:
+            self._restart_to_update()
+
+    def _restart_to_update(self):
+        if not self._ready_update or self._update_process or self._shutting_down:
+            return
         try:
-            req = urllib.request.Request(
-                download_url,
-                headers={"User-Agent": "AudioVisualizer-Updater"},
-            )
-            with urllib.request.urlopen(req, timeout=90) as src, open(partial_path, "wb") as dst:
-                total_bytes = 0
-                content_length = src.headers.get("Content-Length", "").strip()
-                if content_length.isdigit():
-                    total_bytes = int(content_length)
+            self._update_process = launch_update(self._ready_update)
+        except Exception as exc:
+            QMessageBox.warning(self.vis, "Update", f"Could not start the updater.\n\n{exc}")
+            return
+        self.check_updates_action.setEnabled(False)
+        self._handoff_deadline = time.monotonic() + 15
+        self._handoff_timer = QTimer(self)
+        self._handoff_timer.timeout.connect(self._poll_update_handoff)
+        self._handoff_timer.start(100)
 
-                progress = QProgressDialog("Downloading installer...", "Cancel", 0, 100, self.vis)
-                progress.setWindowTitle("Update")
-                progress.setMinimumDuration(0)
-                progress.setAutoClose(False)
-                progress.setAutoReset(False)
-                progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-
-                if total_bytes > 0:
-                    progress.setRange(0, total_bytes)
-                    progress.setValue(0)
-                    progress.setLabelText(
-                        f"Downloading installer... 0% (0.0 MB / {_fmt_mb(total_bytes)})"
-                    )
-                else:
-                    # Unknown file size: keep an indeterminate progress bar.
-                    progress.setRange(0, 0)
-                    progress.setLabelText("Downloading installer... 0.0 MB")
-
-                progress.show()
-                QApplication.processEvents()
-
-                downloaded = 0
-                chunk_size = 256 * 1024
-                while True:
-                    if progress.wasCanceled():
-                        raise RuntimeError("Download canceled by user")
-
-                    chunk = src.read(chunk_size)
-                    if not chunk:
-                        break
-
-                    dst.write(chunk)
-                    downloaded += len(chunk)
-
-                    if total_bytes > 0:
-                        progress.setValue(min(downloaded, total_bytes))
-                        pct = int((downloaded * 100) / max(1, total_bytes))
-                        progress.setLabelText(
-                            "Downloading installer... "
-                            f"{min(pct, 100)}% ({_fmt_mb(downloaded)} / {_fmt_mb(total_bytes)})"
-                        )
-                    else:
-                        progress.setLabelText(f"Downloading installer... {_fmt_mb(downloaded)}")
-                    QApplication.processEvents()
-
-                if total_bytes > 0:
-                    progress.setValue(total_bytes)
-
-            if os.path.exists(installer_path):
-                os.remove(installer_path)
-            os.replace(partial_path, installer_path)
-
-            subprocess.Popen([installer_path], close_fds=True)
-            QMessageBox.information(
-                self.vis,
-                "Update",
-                "Installer downloaded. Audio Visualizer will now close so the updater can continue.",
-            )
+    def _poll_update_handoff(self):
+        if (Path(self._ready_update["stage"]) / "ready").exists():
+            self._handoff_timer.stop()
+            self._clear_update_hold_state()
             self._quit()
-            return True
-        except Exception as e:
-            if os.path.exists(partial_path):
-                try:
-                    os.remove(partial_path)
-                except Exception:
-                    pass
-            QMessageBox.warning(
-                self.vis,
-                "Update",
-                "Could not download or start the installer.\n\n"
-                f"Reason: {e}",
-            )
-            return False
-        finally:
-            if progress:
-                progress.close()
-            self.check_updates_action.setEnabled(True)
-            QApplication.restoreOverrideCursor()
+        elif self._update_process.poll() is not None or time.monotonic() >= self._handoff_deadline:
+            self._handoff_timer.stop()
+            # Stop a helper that did not acknowledge the handoff; keep this app running.
+            if self._update_process.poll() is None:
+                self._update_process.terminate()
+            self._update_process = None
+            self._ready_update = None
+            self.cfg.pop("pending_update", None)
+            self._save()
+            self._build_menu()
+            QMessageBox.warning(self.vis, "Update", "The updater could not start. The current app is still running. You can retry from the tray menu.")
 
     def _check_for_updates(self, silent_error: bool = False, silent_no_update: bool = False):
-        is_manual_check = not silent_error and not silent_no_update
-        self.cfg["last_update_check_ts"] = time.time()
-        self._save()
+        if self._check_worker or self._download_worker or self._shutting_down:
+            return
+        self._check_options = (silent_error, silent_no_update)
+        worker = _UpdateWorker(lambda progress, cancel: check_for_updates(), self)
+        self._check_worker = worker
+        worker.completed.connect(self._on_update_check_finished)
+        self.check_updates_action.setEnabled(False)
+        worker.start()
 
-        result = check_for_updates()
+    def _on_update_check_finished(self, result):
+        worker = self._check_worker
+        self._check_worker = None
+        worker.deleteLater()
+        if self._shutting_down:
+            return
+        self.check_updates_action.setEnabled(True)
+        if result.get("ok"):
+            self.cfg["last_update_check_ts"] = time.time()
+            self._save()
+        else:
+            self._next_update_retry = time.time() + 3600
+        silent_error, silent_no_update = self._check_options
+        self._handle_update_result(result, silent_error, silent_no_update)
+
+    def _handle_update_result(self, result, silent_error=False, silent_no_update=False):
+        is_manual_check = not silent_error and not silent_no_update
         if not result.get("ok", False):
             if silent_error:
                 return
@@ -429,8 +538,11 @@ class TrayManager(QSystemTrayIcon):
             release_name = result.get("release_name", "Latest release")
             release_url = result.get("release_url", "")
             release_notes = result.get("release_notes", "")
-            installer_asset_url = result.get("installer_asset_url", "")
-            installer_asset_name = result.get("installer_asset_name", "")
+            kind = installation_kind()
+            asset = select_update_asset(result, kind)
+            if not is_manual_check and asset:
+                self._download_update(asset, kind, latest_version, automatic=True)
+                return
             notes_preview = self._get_release_notes_preview(release_notes)
 
             dialog_lines = [
@@ -442,14 +554,16 @@ class TrayManager(QSystemTrayIcon):
             ]
             if notes_preview:
                 dialog_lines.extend(["", "Release notes preview:", notes_preview])
+            if not asset:
+                dialog_lines.extend(["", "Open the release page to download this update."])
 
             msg = QMessageBox(self.vis)
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setWindowTitle("Update Available")
             msg.setText("\n".join(dialog_lines))
             install_btn = None
-            if installer_asset_url:
-                install_btn = msg.addButton("Download and Install", QMessageBox.ButtonRole.AcceptRole)
+            if asset:
+                install_btn = msg.addButton("Download update", QMessageBox.ButtonRole.AcceptRole)
             open_btn = msg.addButton("Open Release Page", QMessageBox.ButtonRole.ActionRole)
             remind_btn = msg.addButton("Remind me later", QMessageBox.ButtonRole.ActionRole)
             skip_btn = msg.addButton("Skip this version", QMessageBox.ButtonRole.ActionRole)
@@ -457,8 +571,7 @@ class TrayManager(QSystemTrayIcon):
             msg.exec()
 
             if install_btn and msg.clickedButton() == install_btn:
-                if self._download_and_launch_installer(installer_asset_url, installer_asset_name):
-                    self._clear_update_hold_state()
+                self._download_update(asset, kind, latest_version)
                 return
 
             if msg.clickedButton() == open_btn and release_url:
@@ -493,6 +606,15 @@ class TrayManager(QSystemTrayIcon):
         if self._shutting_down:
             return
         self._shutting_down = True
+        for worker in (self._check_worker, self._download_worker):
+            if worker:
+                worker.cancel.set()
+        if self._download_worker:
+            self._download_progress.close()
+        self._tray_timer.stop()
+        self._auto_update_timer.stop()
+        if hasattr(self, "_handoff_timer"):
+            self._handoff_timer.stop()
         self.vis.timer.stop()
         if self.audio_thread:
             self.audio_thread.stop()

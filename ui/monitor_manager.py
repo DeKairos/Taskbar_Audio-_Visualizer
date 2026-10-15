@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QRect, QPoint
 
 
+ABM_GETSTATE = 0x00000004
 ABM_GETTASKBARPOS = 0x00000005
 ABE_LEFT = 0
 ABE_TOP = 1
@@ -30,6 +31,16 @@ class APPBARDATA(ctypes.Structure):
     ]
 
 
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("szDevice", ctypes.wintypes.WCHAR * 32),
+    ]
+
+
 class MonitorManager:
     """Manages monitor detection and positioning."""
 
@@ -38,6 +49,18 @@ class MonitorManager:
         self._refresh()
         self._shell32 = ctypes.windll.shell32
         self._user32 = ctypes.windll.user32
+        # Explicit pointer-sized signatures avoid truncating handles on 64-bit Windows.
+        for name in ("FindWindowW", "FindWindowExW"):
+            getattr(self._user32, name).restype = ctypes.wintypes.HWND
+        self._user32.FindWindowW.argtypes = [ctypes.wintypes.LPCWSTR, ctypes.wintypes.LPCWSTR]
+        self._user32.FindWindowExW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HWND,
+                                             ctypes.wintypes.LPCWSTR, ctypes.wintypes.LPCWSTR]
+        self._user32.MonitorFromWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.DWORD]
+        self._user32.MonitorFromWindow.restype = ctypes.wintypes.HANDLE
+        self._user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(MONITORINFOEXW)]
+        self._user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
+        self._shell32.SHAppBarMessage.argtypes = [ctypes.wintypes.DWORD, ctypes.POINTER(APPBARDATA)]
+        self._shell32.SHAppBarMessage.restype = ctypes.c_size_t
 
     def _refresh(self):
         """Refresh the list of available screens."""
@@ -62,7 +85,8 @@ class MonitorManager:
                 "width": geo.width(),
                 "height": geo.height(),
                 "dpi": screen.logicalDotsPerInch(),
-                "primary": i == 0,
+                "primary": screen == QApplication.instance().primaryScreen(),
+                "ratio": screen.devicePixelRatio(),
             })
         return monitors
 
@@ -75,7 +99,7 @@ class MonitorManager:
 
     def get_primary_monitor(self):
         """Get the primary monitor."""
-        return self.get_monitor(0)
+        return next((mon for mon in self.get_monitors() if mon["primary"]), None)
 
     def get_taskbar_info(self, monitor_index: int = 0) -> dict:
         """
@@ -90,77 +114,79 @@ class MonitorManager:
 
         screen_geo = mon["geometry"]
         screen_avail = mon["available_geometry"]
-        dpi_ratio = self._get_dpi_ratio()
-
+        hwnd = self._find_taskbar_hwnd(monitor_index)
+        if not hwnd:
+            return self._estimate_from_screen_geometry(screen_geo, screen_avail, monitor_index)
+        physical = self._get_window_rect(hwnd)
+        native = self._window_monitor(hwnd)
+        if physical is None or native is None:
+            return self._estimate_from_screen_geometry(screen_geo, screen_avail, monitor_index)
+        rect = self._rect_to_logical(physical, mon["ratio"], mon, native.rcMonitor)
+        vertical = rect.height() > rect.width()
+        if vertical:
+            edge = ABE_LEFT if abs(rect.left() - screen_geo.left()) < abs(rect.right() - screen_geo.right()) else ABE_RIGHT
+        else:
+            edge = ABE_TOP if abs(rect.top() - screen_geo.top()) < abs(rect.bottom() - screen_geo.bottom()) else ABE_BOTTOM
         abd = APPBARDATA()
         abd.cbSize = ctypes.sizeof(APPBARDATA)
-        abd.hWnd = self._find_taskbar_hwnd(monitor_index)
-
-        if abd.hWnd == 0:
-            print("[MonitorManager] Taskbar HWND not found, using screen geometry fallback")
-            return self._estimate_from_screen_geometry(screen_geo, screen_avail, monitor_index)
-
-        result = self._shell32.SHAppBarMessage(ABM_GETTASKBARPOS, ctypes.byref(abd))
-        if not result:
-            print("[MonitorManager] SHAppBarMessage failed, using screen geometry fallback")
-            return self._estimate_from_screen_geometry(screen_geo, screen_avail, monitor_index)
-
-        # APPBARDATA returns physical pixels - convert to logical pixels for Qt
-        if dpi_ratio and dpi_ratio != 1.0:
-            taskbar_rect = QRect(
-                int(abd.rc.left / dpi_ratio),
-                int(abd.rc.top / dpi_ratio),
-                int((abd.rc.right - abd.rc.left) / dpi_ratio),
-                int((abd.rc.bottom - abd.rc.top) / dpi_ratio)
-            )
-            print(f"[MonitorManager] DPI conversion: {dpi_ratio}x physical→logical for taskbar rect")
-        else:
-            taskbar_rect = QRect(
-                abd.rc.left, abd.rc.top,
-                abd.rc.right - abd.rc.left,
-                abd.rc.bottom - abd.rc.top
-            )
-
-        edge = abd.uEdge
-        autohide = bool(abd.lParam & ABE_AUTOHIDE)
-
-        print(f"[MonitorManager] Taskbar: rect={taskbar_rect}, edge={edge}, autohide={autohide}, dpi_ratio={dpi_ratio}")
-
+        abd.hWnd = hwnd
+        autohide = bool(self._shell32.SHAppBarMessage(ABM_GETSTATE, ctypes.byref(abd)) & ABE_AUTOHIDE)
+        intersection = rect.intersected(screen_geo)
+        hidden = autohide and (intersection.width() <= 2 if vertical else intersection.height() <= 2)
+        # Auto-hidden bars slide outside the screen; keep overlay placement inside it.
+        if hidden:
+            if edge == ABE_BOTTOM:
+                rect.moveBottom(screen_geo.bottom())
+            elif edge == ABE_TOP:
+                rect.moveTop(screen_geo.top())
+            elif edge == ABE_LEFT:
+                rect.moveLeft(screen_geo.left())
+            else:
+                rect.moveRight(screen_geo.right())
         return {
-            "rect": taskbar_rect,
-            "edge": edge,
-            "autohide": autohide,
-            "monitor_index": monitor_index,
-            "screen_geometry": screen_geo,
+            "rect": rect, "edge": edge, "autohide": autohide, "hidden": hidden,
+            "monitor_index": monitor_index, "screen_geometry": screen_geo,
             "screen_available_geometry": screen_avail,
         }
 
-    def _find_taskbar_hwnd(self, monitor_index: int) -> int:
-        """Find the taskbar window handle for the given monitor."""
-        taskbar_class = "Shell_TrayWnd"
-        if monitor_index == 0:
-            hwnd = self._user32.FindWindowW(taskbar_class, None)
-            return hwnd if hwnd else 0
+    def _window_monitor(self, hwnd):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(info)
+        handle = self._user32.MonitorFromWindow(hwnd, 2)
+        return info if handle and self._user32.GetMonitorInfoW(handle, ctypes.byref(info)) else None
 
-        hwnd = self._user32.FindWindowExW(0, 0, taskbar_class, None)
-        for _ in range(monitor_index):
-            if not hwnd:
-                return 0
-            hwnd = self._user32.FindWindowExW(0, hwnd, taskbar_class, None)
-        return hwnd if hwnd else 0
+    def _find_taskbar_hwnd(self, monitor_index: int) -> int:
+        """Match the taskbar's native display name to QScreen, not enumeration order."""
+        mon = self.get_monitor(monitor_index)
+        if not mon:
+            return 0
+        for window_class in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+            hwnd = self._user32.FindWindowExW(0, 0, window_class, None)
+            while hwnd:
+                native = self._window_monitor(hwnd)
+                if native and native.szDevice.casefold() == mon["name"].casefold():
+                    return hwnd
+                hwnd = self._user32.FindWindowExW(0, hwnd, window_class, None)
+        return 0
 
     def _estimate_from_screen_geometry(self, screen_geo: QRect, screen_avail: QRect, monitor_index: int) -> dict:
         """Fallback: estimate taskbar from screen vs available geometry."""
-        full_h = screen_geo.height()
-        avail_h = screen_avail.height()
-        taskbar_h = full_h - avail_h
-
-        if taskbar_h > 0:
-            edge = ABE_BOTTOM
-            rect = QRect(screen_avail.x(), screen_avail.y() + avail_h, screen_avail.width(), taskbar_h)
+        gaps = [
+            (screen_avail.left() - screen_geo.left(), ABE_LEFT),
+            (screen_avail.top() - screen_geo.top(), ABE_TOP),
+            (screen_geo.right() - screen_avail.right(), ABE_RIGHT),
+            (screen_geo.bottom() - screen_avail.bottom(), ABE_BOTTOM),
+        ]
+        thickness, edge = max(gaps)
+        thickness = thickness if thickness > 0 else 40
+        if edge == ABE_LEFT:
+            rect = QRect(screen_geo.left(), screen_geo.top(), thickness, screen_geo.height())
+        elif edge == ABE_TOP:
+            rect = QRect(screen_geo.left(), screen_geo.top(), screen_geo.width(), thickness)
+        elif edge == ABE_RIGHT:
+            rect = QRect(screen_geo.right() - thickness + 1, screen_geo.top(), thickness, screen_geo.height())
         else:
-            edge = ABE_BOTTOM
-            rect = QRect(screen_avail.x(), screen_avail.y() + avail_h - 40, screen_avail.width(), 40)
+            rect = QRect(screen_geo.left(), screen_geo.bottom() - thickness + 1, screen_geo.width(), thickness)
 
         return {
             "rect": rect,
@@ -194,152 +220,63 @@ class MonitorManager:
         edge = info["edge"]
 
         if edge in (ABE_LEFT, ABE_RIGHT):
-            return self._get_vertical_empty_space(taskbar_rect, edge)
+            return self._get_vertical_empty_space(taskbar_rect, edge, monitor_index)
 
-        return self._get_horizontal_empty_space(taskbar_rect, alignment_hint)
+        return self._get_horizontal_empty_space(taskbar_rect, alignment_hint, monitor_index, edge)
 
-    def _get_horizontal_empty_space(self, taskbar_rect: QRect, alignment_hint: str = "left") -> dict:
-        """Find empty space on horizontal (bottom/top) taskbar.
+    def _logical_child_rect(self, parent, class_name, monitor_index):
+        hwnd = self._user32.FindWindowExW(parent, 0, class_name, None)
+        # Windows 10 nests the task list in a rebar/task-switcher container.
+        if not hwnd and class_name == "MSTaskListWClass":
+            rebar = self._user32.FindWindowExW(parent, 0, "ReBarWindow32", None)
+            switcher = self._user32.FindWindowExW(rebar, 0, "MSTaskSwWClass", None) if rebar else 0
+            hwnd = self._user32.FindWindowExW(switcher, 0, class_name, None) if switcher else 0
+        rect = self._get_window_rect(hwnd)
+        mon = self.get_monitor(monitor_index)
+        native = self._window_monitor(parent)
+        return self._rect_to_logical(rect, mon["ratio"], mon, native.rcMonitor) if rect and mon and native else None
 
-        Uses alignment_hint to determine which space to use:
-        - "left": space BEFORE Start button (at taskbar left edge)
-        - "center": larger of space before Start or space after icons
-        """
-        dpi_ratio = self._get_dpi_ratio()
-        print(f"[MonitorManager] Detecting horizontal empty space, DPI ratio: {dpi_ratio}")
+    def _get_horizontal_empty_space(self, taskbar_rect, alignment_hint="left", monitor_index=0, edge=ABE_BOTTOM):
+        hwnd = self._find_taskbar_hwnd(monitor_index)
+        if not hwnd:
+            return self._fallback_empty_space(taskbar_rect, edge)
+        start = self._logical_child_rect(hwnd, "Start", monitor_index)
+        tasklist = self._logical_child_rect(hwnd, "MSTaskListWClass", monitor_index)
+        tray = self._logical_child_rect(hwnd, "TrayNotifyWnd", monitor_index)
+        before_end = min(r.left() for r in (start, tasklist) if r is not None) if start or tasklist else taskbar_rect.left()
+        before = max(0, before_end - taskbar_rect.left() - 8)
+        # The after gap starts AFTER the task list, never inside its occupied area.
+        after_start = max(r.right() + 1 for r in (start, tasklist) if r is not None) if start or tasklist else taskbar_rect.right() + 1
+        after_end = tray.left() if tray else taskbar_rect.right() + 1
+        after = max(0, after_end - after_start - 8) if tasklist else 0
+        choices = [(before, taskbar_rect.left())]
+        if alignment_hint == "center":
+            choices.append((after, after_start + 4))
+        width, x = max(choices)
+        if width < 100:
+            return self._fallback_empty_space(taskbar_rect, edge)
+        return {"width": width, "x": x, "edge": edge, "available": True}
 
-        try:
-            taskbar_hwnd = self._user32.FindWindowW("Shell_TrayWnd", None)
-            if not taskbar_hwnd:
-                print("[MonitorManager] Taskbar HWND not found")
-                return self._fallback_empty_space(taskbar_rect, ABE_BOTTOM)
-
-            # Get all relevant window rects
-            start_rect = self._get_window_rect(self._user32.FindWindowExW(taskbar_hwnd, 0, "Start", None))
-            tray_rect = self._get_window_rect(self._user32.FindWindowExW(taskbar_hwnd, 0, "TrayNotifyWnd", None))
-            tasklist_rect = self._get_window_rect(self._user32.FindWindowExW(taskbar_hwnd, 0, "MSTaskListWClass", None))
-
-            # Convert to logical pixels
-            start_logical = self._rect_to_logical(start_rect, dpi_ratio) if start_rect else None
-            tray_logical = self._rect_to_logical(tray_rect, dpi_ratio) if tray_rect else None
-            tasklist_logical = self._rect_to_logical(tasklist_rect, dpi_ratio) if tasklist_rect else None
-
-            print(f"[MonitorManager] Start: {start_logical}, Tray: {tray_logical}, TaskList: {tasklist_logical}")
-
-            if not start_logical:
-                print("[MonitorManager] Start button not found, using fallback")
-                return self._fallback_empty_space(taskbar_rect, ABE_BOTTOM)
-
-            # Find icon group boundaries
-            icon_left = start_logical.right()  # Icons start after Start button
-            icon_right = taskbar_rect.right()  # Default to taskbar edge
-
-            if tray_logical:
-                icon_right = min(icon_right, tray_logical.left())
-            if tasklist_logical:
-                # Tasklist might span the icon area - use its left as icon group start
-                if tasklist_logical.left() > start_logical.right():
-                    icon_left = tasklist_logical.left()
-                # Find the rightmost icon by checking tasklist right edge
-                if tasklist_logical.right() < icon_right:
-                    icon_right = tasklist_logical.right()
-
-            print(f"[MonitorManager] Icon group: left={icon_left}, right={icon_right}")
-
-            # Calculate empty space based on alignment_hint (user's setting)
-            # Space BEFORE icon group (left side of Start button)
-            space_before_icons = max(0, start_logical.left() - taskbar_rect.left())
-            # Space AFTER icon group (right side, before system tray)
-            space_after_icons = max(0, icon_right - icon_left)
-
-            print(f"[MonitorManager] Space before icons: {space_before_icons}, after icons: {space_after_icons}")
-
-            if alignment_hint == "left":
-                # Use space BEFORE Start button (at taskbar left edge)
-                if space_before_icons > 100:
-                    return {
-                        "width": space_before_icons,
-                        "x": taskbar_rect.left(),
-                        "edge": ABE_BOTTOM,
-                        "available": True
-                    }
-            else:  # "center"
-                # Use larger of space before Start or space after icons
-                space_to_use = max(space_before_icons, space_after_icons)
-                if space_to_use > 100:
-                    if space_before_icons >= space_after_icons:
-                        return {
-                            "width": space_before_icons,
-                            "x": taskbar_rect.left(),
-                            "edge": ABE_BOTTOM,
-                            "available": True
-                        }
-                    else:
-                        return {
-                            "width": space_after_icons,
-                            "x": icon_left,
-                            "edge": ABE_BOTTOM,
-                            "available": True
-                        }
-
-            # Fallback: not enough space detected
-            print("[MonitorManager] Not enough empty space detected, using fallback")
-            return self._fallback_empty_space(taskbar_rect, ABE_BOTTOM)
-
-        except Exception as e:
-            print(f"[MonitorManager] Empty space detection failed: {e}")
-            return self._fallback_empty_space(taskbar_rect, ABE_BOTTOM)
-
-    def _rect_to_logical(self, rect, dpi_ratio):
-        """Convert physical pixel rect to logical pixels."""
-        if not rect or dpi_ratio == 1.0:
-            return rect
+    @staticmethod
+    def _rect_to_logical(rect, dpi_ratio, monitor=None, physical_monitor=None):
+        """Scale offsets within a display; Qt keeps native desktop origins on Windows."""
+        if rect is None:
+            return None
+        ratio = dpi_ratio or 1.0
+        physical_x = physical_monitor.left if physical_monitor is not None else 0
+        physical_y = physical_monitor.top if physical_monitor is not None else 0
+        logical_x = monitor["geometry"].x() if monitor else 0
+        logical_y = monitor["geometry"].y() if monitor else 0
         return QRect(
-            int(rect.left / dpi_ratio),
-            int(rect.top / dpi_ratio),
-            int((rect.right - rect.left) / dpi_ratio),
-            int((rect.bottom - rect.top) / dpi_ratio)
+            logical_x + round((rect.left - physical_x) / ratio),
+            logical_y + round((rect.top - physical_y) / ratio),
+            round((rect.right - rect.left) / ratio),
+            round((rect.bottom - rect.top) / ratio),
         )
 
-    def _get_vertical_empty_space(self, taskbar_rect: QRect, edge: int) -> dict:
-        """Find empty space on vertical (left/right) taskbar - simplified."""
-        dpi_ratio = self._get_dpi_ratio()
-        print(f"[MonitorManager] Detecting vertical empty space, DPI ratio: {dpi_ratio}")
-
-        try:
-            taskbar_hwnd = self._user32.FindWindowW("Shell_TrayWnd", None)
-            start_hwnd = self._user32.FindWindowExW(taskbar_hwnd, 0, "Start", None)
-            start_rect = self._get_window_rect(start_hwnd)
-
-            if start_rect and dpi_ratio and dpi_ratio != 1.0:
-                start_top = int(start_rect.top / dpi_ratio)
-                start_bottom = int(start_rect.bottom / dpi_ratio)
-                empty_height = start_top - taskbar_rect.top()
-                if empty_height < 50:
-                    empty_height = taskbar_rect.bottom() - start_bottom
-
-                print(f"[MonitorManager] Vertical empty space: height={empty_height}, y={start_top}")
-                return {
-                    "width": empty_height,
-                    "x": start_top,
-                    "edge": edge,
-                    "available": empty_height > 50
-                }
-            elif start_rect:
-                start_top = start_rect.top
-                empty_height = start_top - taskbar_rect.top()
-                if empty_height < 50:
-                    empty_height = taskbar_rect.bottom() - start_rect.bottom
-                return {
-                    "width": empty_height,
-                    "x": start_top,
-                    "edge": edge,
-                    "available": empty_height > 50
-                }
-        except Exception as e:
-            print(f"[MonitorManager] Vertical empty space detection failed: {e}")
-
-        print("[MonitorManager] Vertical fallback empty space")
+    def _get_vertical_empty_space(self, taskbar_rect, edge, monitor_index=0):
+        # Shell child rectangles don't reliably expose all vertical icons. Use the
+        # existing fallback until a complete occupied-area measurement is available.
         return self._fallback_empty_space(taskbar_rect, edge)
 
     def _fallback_empty_space(self, taskbar_rect: QRect, edge: int) -> dict:
@@ -403,7 +340,7 @@ class MonitorManager:
             if width_mode == "auto" and empty_space.get("available"):
                 # Auto mode: use alignment to determine position, empty space for width
                 vis_w = empty_space.get("width", int(taskbar.width() * width_percent / 100))
-                vis_x, vis_y = self._get_position_for_alignment(taskbar, vis_w, vis_height, alignment_hint, edge)
+                vis_x, vis_y = empty_space["x"], taskbar.top()
             elif width_mode == "fixed":
                 vis_w = width_percent
                 vis_x, vis_y = self._get_position_for_alignment(taskbar, vis_w, vis_height, alignment_hint, edge)
@@ -415,7 +352,7 @@ class MonitorManager:
         elif edge == ABE_TOP:
             if width_mode == "auto" and empty_space.get("available"):
                 vis_w = empty_space.get("width", int(taskbar.width() * width_percent / 100))
-                vis_x, vis_y = self._get_position_for_alignment(taskbar, vis_w, vis_height, alignment_hint, edge)
+                vis_x, vis_y = empty_space["x"], taskbar.top()
             elif width_mode == "fixed":
                 vis_w = width_percent
                 vis_x, vis_y = self._get_position_for_alignment(taskbar, vis_w, vis_height, alignment_hint, edge)
@@ -427,7 +364,7 @@ class MonitorManager:
         elif edge == ABE_LEFT:
             if width_mode == "auto" and empty_space.get("available"):
                 vis_h = empty_space.get("width", vis_height)
-                vis_x, vis_y = self._get_position_for_alignment_vertical(taskbar, vis_h, vis_height, alignment_hint, edge)
+                vis_x, vis_y = taskbar.left(), empty_space["x"]
             elif width_mode == "fixed":
                 vis_h = width_percent
                 vis_x, vis_y = self._get_position_for_alignment_vertical(taskbar, vis_h, vis_height, alignment_hint, edge)
@@ -439,7 +376,7 @@ class MonitorManager:
         elif edge == ABE_RIGHT:
             if width_mode == "auto" and empty_space.get("available"):
                 vis_h = empty_space.get("width", vis_height)
-                vis_x, vis_y = self._get_position_for_alignment_vertical(taskbar, vis_h, vis_height, alignment_hint, edge)
+                vis_x, vis_y = taskbar.left(), empty_space["x"]
             elif width_mode == "fixed":
                 vis_h = width_percent
                 vis_x, vis_y = self._get_position_for_alignment_vertical(taskbar, vis_h, vis_height, alignment_hint, edge)
@@ -455,7 +392,7 @@ class MonitorManager:
         if edge == ABE_BOTTOM or edge == ABE_TOP:
             pos = self._verify_bounds_horizontal(pos, taskbar, edge)
         else:
-            pos = self._verify_bounds_vertical(pos, taskbar, edge)
+            pos = self._verify_bounds_vertical(pos, taskbar)
 
         print(f"[MonitorManager] Final position: {pos}")
         return pos
@@ -492,56 +429,20 @@ class MonitorManager:
             x = taskbar.left() + (taskbar.width() - vis_w) // 2
         return (x, y)
 
-    def _verify_bounds_horizontal(self, pos: tuple, taskbar: QRect, edge: int) -> tuple:
-        """Verify bounds for horizontal (bottom/top) taskbar."""
+    @staticmethod
+    def _clamp_to_taskbar(pos, taskbar):
         x, y, w, h = pos
+        w = max(1, min(w, taskbar.width()))
+        h = max(1, min(h, taskbar.height()))
+        x = max(taskbar.left(), min(x, taskbar.right() + 1 - w))
+        y = max(taskbar.top(), min(y, taskbar.bottom() + 1 - h))
+        return x, y, w, h
 
-        # Clamp to taskbar bounds for horizontal edges
-        if x < taskbar.left():
-            x = taskbar.left()
-        if x + w > taskbar.right():
-            w = max(100, taskbar.right() - x)
+    def _verify_bounds_horizontal(self, pos, taskbar, edge):
+        return self._clamp_to_taskbar(pos, taskbar)
 
-        if edge == ABE_BOTTOM:
-            # Visualizer should be within taskbar vertically
-            if y < taskbar.top():
-                y = taskbar.top()
-            if y + h > taskbar.bottom():
-                h = max(20, taskbar.bottom() - y)
-        else:  # ABE_TOP
-            if y < taskbar.top():
-                y = taskbar.top()
-            if y + h > taskbar.bottom():
-                h = max(20, taskbar.bottom() - y)
-
-        # If still out of bounds, use safe position within taskbar
-        if w < 50 or h < 20:
-            print("[MonitorManager] Position out of bounds, using safe position within taskbar")
-            safe_w = max(100, taskbar.width() // 4)
-            return (taskbar.left(), taskbar.top() + (taskbar.height() - 40) // 2, safe_w, 40)
-
-        return (x, y, w, h)
-
-    def _verify_bounds_vertical(self, pos: tuple, screen_avail: QRect) -> tuple:
-        """Verify bounds for vertical (left/right) taskbar."""
-        x, y, w, h = pos
-
-        # Clamp to screen available area for vertical edges
-        if x < screen_avail.left():
-            x = screen_avail.left()
-        if y < screen_avail.top():
-            y = screen_avail.top()
-        if x + w > screen_avail.right():
-            w = max(20, screen_avail.right() - x)
-        if y + h > screen_avail.bottom():
-            h = max(100, screen_avail.bottom() - y)
-
-        # If still out of bounds, use safe position
-        if w < 20 or h < 50:
-            print("[MonitorManager] Position out of bounds, using safe position")
-            return (screen_avail.left(), screen_avail.top() + screen_avail.height() // 4, 40, screen_avail.height() // 2)
-
-        return (x, y, w, h)
+    def _verify_bounds_vertical(self, pos, taskbar):
+        return self._clamp_to_taskbar(pos, taskbar)
 
     def _safe_position(self, x: int, y: int, w: int, h: int, monitor_index: int) -> tuple:
         """Return a safe fallback position."""

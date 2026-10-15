@@ -10,9 +10,9 @@ Runs a lightweight polling loop on a background thread.
 import asyncio
 import threading
 import time
-import io
 import traceback
 import ctypes
+from color_themes import artwork_accent
 
 try:
     from winsdk.windows.media.control import (
@@ -103,26 +103,25 @@ class MediaMonitor:
             # Force next valid session to be treated as a fresh track snapshot,
             # even if title/artist/album are unchanged after device switches.
             self._prev_key = ""
-            if self.info.title:
-                self.info.title = ""
-                self.info.artist = ""
-                self.info.album = ""
-                self.info.cover_bytes = None
-                self.info.changed = True
+            if self.info.title or self.info.cover_bytes:
+                empty = MediaInfo()
+                empty.changed = True
+                self.info = empty
             return
 
         props = await session.try_get_media_properties_async()
         title = props.title or ""
         artist = props.artist or ""
         album = getattr(props, "album_title", "") or ""
-        key = f"{artist}|{title}|{album}"
+        key = (getattr(session, "source_app_user_model_id", ""), artist, title, album)
 
         if key != self._prev_key:
-            self._prev_key = key
-            self.info.title = title
-            self.info.artist = artist
-            self.info.album = album
-            self.info.changed = True
+            # Build the whole snapshot before publishing it to the UI thread.
+            snapshot = MediaInfo()
+            snapshot.title = title
+            snapshot.artist = artist
+            snapshot.album = album
+            snapshot.changed = True
 
             # Try to extract album art dominant colour
             try:
@@ -141,15 +140,20 @@ class MediaMonitor:
                     data = bytearray(buf.length)
                     reader.read_bytes(data)
                     raw = bytes(data)
-                    self.info.cover_bytes = raw or None
+                    snapshot.cover_bytes = raw or None
                     rgb = self._dominant_color(raw)
                     if rgb:
-                        self.info.accent_rgb = rgb
+                        snapshot.accent_rgb = rgb
+                    else:
+                        snapshot.cover_bytes = None
                 else:
-                    self.info.cover_bytes = None
+                    snapshot.cover_bytes = None
             except Exception:
-                self.info.cover_bytes = None
+                snapshot.cover_bytes = None
                 pass   # thumbnail extraction is best-effort
+
+            self._prev_key = key
+            self.info = snapshot
 
     # ── Transport control (fallback to media-key simulation) ───────
     def _send_media_key(self, vk: int):
@@ -191,26 +195,4 @@ class MediaMonitor:
 
     @staticmethod
     def _dominant_color(img_bytes: bytes):
-        """Extract dominant colour from raw image bytes (JPEG/PNG).
-        Uses simple averaging of brightest 30% pixels.
-        Returns (R, G, B) or None on failure.
-        """
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            img = img.resize((50, 50))
-            pixels = list(img.getdata())
-            # sort by brightness, take top 30%
-            pixels.sort(key=lambda p: sum(p), reverse=True)
-            top = pixels[:max(1, len(pixels) // 3)]
-            r = sum(p[0] for p in top) // len(top)
-            g = sum(p[1] for p in top) // len(top)
-            b = sum(p[2] for p in top) // len(top)
-            # Ensure minimum saturation & brightness
-            mx = max(r, g, b, 1)
-            if mx < 80:
-                scale = 80 / mx
-                r, g, b = int(r * scale), int(g * scale), int(b * scale)
-            return (min(r, 255), min(g, 255), min(b, 255))
-        except Exception:
-            return None
+        return artwork_accent(img_bytes)

@@ -1,15 +1,8 @@
-import comtypes
-comtypes.CoInitialize()
 import sys
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer, QLockFile, QStandardPaths, qInstallMessageHandler
-from audio_capture import AudioCaptureThread
-from visualizer_window import VisualizerWindow
-from tray_manager import TrayManager
-from config_manager import load_config
-from media_monitor import MediaMonitor
-from app_resources import get_app_icon
+from app_resources import get_app_icon, get_resource_path
 from modes import load_builtin_modes
 
 
@@ -33,6 +26,47 @@ def _acquire_single_instance_lock() -> bool:
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        # Used by release builds before distribution; no desktop or audio devices.
+        import json
+        from modes import list_modes
+        from update_checker import get_current_version
+
+        load_builtin_modes()
+        modes = sorted(mode["id"] for mode in list_modes())
+        expected = {"bars", "wave", "mirror", "dot_matrix", "skyline"}
+        version = get_current_version()
+        resources = all(Path(get_resource_path(name)).is_file()
+                        for name in ("assets/app_icon.ico", "tools/update_helper.ps1"))
+        ok = expected <= set(modes) and version != "0.0.0" and resources
+        imports_ok = False
+        import_error = ""
+        try:
+            # Check the runtime path too: registry-only checks can miss a DLL
+            # or module that loads only when the tray/settings UI starts.
+            from audio_capture import AudioCaptureThread
+            from visualizer_window import VisualizerWindow
+            from tray_manager import TrayManager
+            from ui.settings_window import SettingsWindow
+            from media_monitor import MediaMonitor
+            imports_ok = True
+        except Exception as exc:
+            import_error = f"{type(exc).__name__}: {exc}"
+        ok = ok and imports_ok
+        Path(sys.argv[2]).write_text(
+            json.dumps({"ok": ok, "modes": modes, "version": version, "resources": resources,
+                        "runtime_imports": imports_ok, "error": import_error}), encoding="utf-8"
+        )
+        return 0 if ok else 1
+
+    import comtypes
+    comtypes.CoInitialize()
+    from audio_capture import AudioCaptureThread
+    from visualizer_window import VisualizerWindow
+    from tray_manager import TrayManager
+    from config_manager import load_config
+    from media_monitor import MediaMonitor
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 

@@ -59,6 +59,31 @@ ELEVATION_8 = {"blur": 8, "offset_y": 2, "alpha": 28}
 ELEVATION_16 = {"blur": 16, "offset_y": 4, "alpha": 32}
 ELEVATION_64 = {"blur": 64, "offset_y": 16, "alpha": 40}
 
+# ── Windows 11 Fluent (WinUI) dark surfaces ───────────────────────
+# Solid stand-ins for WinUI 3 dark-theme layer colors. Real Mica/acrylic
+# needs DWM composition that offscreen tests and some setups lack, so
+# surfaces use these matched solid fills instead. Shared by every window.
+WINUI_DARK = {
+    "window":        "#202020",  # layer background (Mica base)
+    "card":          "#272727",  # content card surface
+    "card_alt":      "#2b2b2b",  # elevated row / control surface
+    "control":       "#2d2d2d",  # resting control fill (combo, button)
+    "control_hover": "#323232",
+    "control_press": "#252525",
+    "stroke":        "#3a3a3a",  # control border
+    "separator":     "#343434",
+    "nav_hover":     "#2f2f2f",
+    "nav_select":    "#3a3a3a",
+}
+# WinUI dark accent for text / chevrons (readable on dark fills).
+ACCENT_TEXT_DARK = "#60cdff"
+
+
+def token_rgba(name: str, alpha: int) -> str:
+    """`rgba(...)` string for a WINUI_DARK token at the given alpha."""
+    c = QColor(WINUI_DARK[name])
+    return f"rgba({c.red()},{c.green()},{c.blue()},{alpha})"
+
 
 # ── Color Helpers ──────────────────────────────────────────────────
 

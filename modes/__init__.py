@@ -11,8 +11,7 @@ def load_builtin_modes():
     Importing `builtins` will execute its top-level registration code.
     """
     try:
-        import importlib
-        importlib.import_module('.builtins', __package__)
+        from . import builtins  # Static import lets PyInstaller discover registrations.
     except Exception:
         # If import fails, leave the registry usable and expose the cause.
         logger.exception("Failed to load built-in visualizer modes")
