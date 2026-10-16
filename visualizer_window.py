@@ -341,10 +341,8 @@ class VisualizerWindow(QWidget):
             # Cross-process parenting with mismatched DPI contexts can reset
             # process DPI awareness. Preserve standalone rendering instead.
             taskbar = 0
-        reparented_visible = False
         if taskbar != self._taskbar_host_hwnd or (
                 taskbar and user32.GetParent(hwnd) != taskbar):
-            reparented_visible = self.isVisible()
             window = self.windowHandle()
             old_host = self._taskbar_host_window
             host = QWindow.fromWinId(taskbar) if taskbar else None
@@ -365,12 +363,6 @@ class VisualizerWindow(QWidget):
             target.translate(-info["rect"].topLeft())
         if self.geometry() != target:
             self.setGeometry(target)
-        if reparented_visible:
-            # Reparenting a visible QWidget's QWindow can leave Qt unexposed:
-            # timers run but backing-store updates stop after the first frame.
-            # A visibility transition reestablishes the native expose event.
-            self.hide()
-            self.show()
 
     def _detect_start_button_x(self, dpi_ratio: float):
         """Legacy method kept for compatibility - delegates to MonitorManager."""

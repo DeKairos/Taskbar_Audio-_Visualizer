@@ -26,11 +26,7 @@ def test_hosted_recovery_never_changes_taskbar_topmost_state(monkeypatch, hosted
 
 
 def make_overlay(monkeypatch, *, same_dpi=True, can_attach=True):
-    state = SimpleNamespace(parent=None, geometry=QRect(), hosts=[], placements=[],
-                            visible=True, transitions=[])
-    def set_visible(visible):
-        state.visible = visible
-        state.transitions.append(visible)
+    state = SimpleNamespace(parent=None, geometry=QRect(), hosts=[], placements=[])
     def wrap(hwnd):
         host = SimpleNamespace(hwnd=hwnd, deleteLater=lambda: None)
         state.hosts.append(host)
@@ -51,8 +47,6 @@ def make_overlay(monkeypatch, *, same_dpi=True, can_attach=True):
         _taskbar_host_window=None, _taskbar_host_hwnd=0,
         windowHandle=lambda: SimpleNamespace(setParent=set_parent),
         geometry=lambda: state.geometry, setGeometry=set_geometry,
-        isVisible=lambda: state.visible,
-        hide=lambda: set_visible(False), show=lambda: set_visible(True),
         _monitor_mgr=SimpleNamespace(_find_taskbar_hwnd=lambda index: 200))
     return vis, state
 
@@ -65,16 +59,6 @@ def test_hosted_geometry_uses_taskbar_coordinates_on_secondary_monitor(monkeypat
     assert state.geometry == QRect(80, 0, 400, 40)
     VisualizerWindow._place_on_taskbar(vis, (2000, -40, 400, 40), info)
     assert len(state.hosts) == len(state.placements) == 1
-    assert state.transitions == [False, True]
-
-
-def test_reparenting_hidden_overlay_does_not_show_it(monkeypatch):
-    vis, state = make_overlay(monkeypatch)
-    state.visible = False
-    VisualizerWindow._place_on_taskbar(vis, (20, 800, 400, 40), {'rect': QRect(0, 800, 1200, 40)})
-    assert state.parent == 200
-    assert state.visible is False
-    assert state.transitions == []
 
 
 @pytest.mark.parametrize('same_dpi, can_attach', [(False, True), (True, False)])
