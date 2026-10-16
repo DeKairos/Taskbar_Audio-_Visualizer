@@ -465,6 +465,7 @@ class TrayManager(QSystemTrayIcon):
     def _poll_update_handoff(self):
         if (Path(self._ready_update["stage"]) / "ready").exists():
             self._handoff_timer.stop()
+            self.cfg.pop("pending_update", None)
             self._clear_update_hold_state()
             self._quit()
         elif self._update_process.poll() is not None or time.monotonic() >= self._handoff_deadline:

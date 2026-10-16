@@ -1,11 +1,18 @@
 param([Parameter(Mandatory = $true)][string]$PlanPath)
 $ErrorActionPreference = 'Stop'
 $stage = Split-Path -Parent (Resolve-Path -LiteralPath $PlanPath).Path
+# Only one helper may consume a staged update. A second helper must not
+# overwrite the active attempt's result or launch the old application.
+try {
+    $updateLock = [IO.File]::Open((Join-Path $stage 'update.lock'), [IO.FileMode]::OpenOrCreate,
+                                [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+} catch [IO.IOException] { exit 2 }
 $plan = Get-Content -LiteralPath $PlanPath -Raw | ConvertFrom-Json
 $exePath = [IO.Path]::GetFullPath($plan.executable)
 $appDir = Split-Path -Parent $exePath
 $payload = [IO.Path]::GetFullPath($plan.payload)
-$backup = Join-Path $stage 'backup'
+$attempt = Join-Path $stage ('attempt-' + [Guid]::NewGuid().ToString('N'))
+$backup = Join-Path $attempt 'backup'
 $changed = $false
 $backedUp = @()
 $targets = @()
@@ -97,7 +104,7 @@ function Remove-AppEntry([string]$name) {
 }
 
 function Start-App {
-    Start-Process -FilePath $exePath -WorkingDirectory $appDir
+    Start-Process -FilePath $exePath -WorkingDirectory $appDir -WindowStyle Hidden
 }
 
 try {
@@ -118,13 +125,14 @@ try {
     $parent = Get-Process -Id $plan.parent_pid -ErrorAction SilentlyContinue
     if ($parent -and !$parent.WaitForExit(60000)) { throw 'The application did not close; no update was applied' }
     $parentExited = $true
+    New-Item -ItemType Directory -Path $attempt | Out-Null
 
     $sources = @{}
     if ($plan.kind -eq 'portable-exe') {
         $targets = @((Split-Path -Leaf $exePath))
         $sources[$targets[0]] = $payload
     } elseif ($plan.kind -eq 'portable-folder') {
-        $content = Join-Path $stage 'content'
+        $content = Join-Path $attempt 'content'
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [IO.Compression.ZipFile]::ExtractToDirectory($payload, $content)
         foreach ($entry in Get-ChildItem -LiteralPath $content) {
@@ -153,7 +161,7 @@ try {
     }
     $changed = $true
     if ($plan.kind -eq 'installed') {
-        $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/UPDATE=1', ('/DIR="' + $appDir + '"'), ('/LOG="' + (Join-Path $stage 'installer.log') + '"'))
+        $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/UPDATE=1', ('/DIR="' + $appDir + '"'), ('/LOG="' + (Join-Path $attempt 'installer.log') + '"'))
         $installer = Start-Process -FilePath $payload -ArgumentList $arguments -WindowStyle Hidden -PassThru
         if (!$installer.WaitForExit(300000)) { $installer.Kill(); $installer.WaitForExit(); throw 'Installer timed out' }
         if ($installer.ExitCode -ne 0) { throw "Installer failed with code $($installer.ExitCode)" }
@@ -163,7 +171,7 @@ try {
             Copy-Entry $sources[$name] (Join-Path $appDir $name)
         }
     }
-    $report = Join-Path $stage 'verification.json'
+    $report = Join-Path $attempt 'verification.json'
     $check = Start-Process -FilePath $exePath -ArgumentList @('--self-test', ('"' + $report + '"')) -WindowStyle Hidden -PassThru
     if (!$check.WaitForExit(60000)) { $check.Kill(); $check.WaitForExit(); throw 'Updated application failed its startup check' }
     if ($check.ExitCode -ne 0) { throw 'Updated application failed its startup check' }
@@ -188,4 +196,6 @@ try {
         @{ok = $false; error = $failure; recovered = $false; backup = $backup} | ConvertTo-Json | Set-Content -LiteralPath $plan.result_path -Encoding UTF8
     }
     exit 1
+} finally {
+    $updateLock.Dispose()
 }

@@ -9,11 +9,40 @@ import time
 import zipfile
 import winreg
 import uuid
+import ctypes
+from ctypes import wintypes
 
 import pytest
 
 HELPER = Path(__file__).resolve().parents[1] / "tools/update_helper.ps1"
 POWERSHELL = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+
+
+def test_duplicate_helper_cannot_overwrite_an_active_attempt(tmp_path):
+    stage = tmp_path / 'staged'
+    stage.mkdir()
+    report = tmp_path / 'outcome.json'
+    report.write_text('previous outcome')
+    plan = stage / 'plan.json'
+    plan.write_text(json.dumps({'result_path': str(report)}))
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(stage / 'update.lock'), 0xC0000000, 0, None, 4, 0x80, None)
+    assert handle != wintypes.HANDLE(-1).value
+    try:
+        process = subprocess.run([str(POWERSHELL), '-NoProfile', '-NonInteractive',
+                                  '-ExecutionPolicy', 'Bypass', '-File', str(HELPER),
+                                  '-PlanPath', str(plan)], capture_output=True, text=True,
+                                 timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+        assert process.returncode == 2, process.stderr
+        assert report.read_text() == 'previous outcome'
+        assert not (stage / 'ready').exists()
+        assert not list(stage.glob('attempt-*'))
+    finally:
+        kernel.CloseHandle(handle)
 
 
 @pytest.fixture(scope="module")
@@ -107,11 +136,17 @@ def installed_registration():
 
 @pytest.mark.parametrize("kind", ["portable-exe", "portable-folder", "installed"])
 @pytest.mark.parametrize("healthy", [True, False])
-def test_helper_applies_update_or_restores_previous_version(fake_apps, tmp_path, kind, healthy, installed_registration):
+@pytest.mark.parametrize("stale_work", [False, True])
+def test_helper_applies_update_or_restores_previous_version(fake_apps, tmp_path, kind, healthy, stale_work, installed_registration):
     app_dir = tmp_path / "app with spaces"
     stage = tmp_path / "staged"
     app_dir.mkdir()
     stage.mkdir()
+    if stale_work:
+        (stage / 'backup').mkdir()
+        (stage / 'backup' / 'earlier-backup.txt').write_text('preserve this backup')
+        (stage / 'content').mkdir()
+        (stage / 'content' / 'AudioVisualizer.exe').write_bytes(b'old extracted payload')
     executable = app_dir / ("AudioVisualizer.exe" if kind == "installed" else "Renamed Visualizer.exe")
     shutil.copyfile(fake_apps["1.0.0"], executable)
     untouched = app_dir / "personal-notes.txt"
@@ -148,6 +183,9 @@ def test_helper_applies_update_or_restores_previous_version(fake_apps, tmp_path,
     expected = "2.0.0" if healthy else "1.0.0"
     assert executable.read_bytes() == fake_apps[expected].read_bytes()
     assert untouched.read_text() == "keep"
+    if stale_work:
+        assert (stage / 'backup' / 'earlier-backup.txt').read_text() == 'preserve this backup'
+        assert (stage / 'content' / 'AudioVisualizer.exe').read_bytes() == b'old extracted payload'
     if not healthy:
         assert result["recovered"]
         assert (runtime / "old.dll").read_bytes() == b"old runtime"

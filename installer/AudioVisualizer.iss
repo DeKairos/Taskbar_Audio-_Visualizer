@@ -5,7 +5,7 @@
 	#define MyAppExeName "AudioVisualizer.exe"
 #endif
 #ifndef MyAppVersion
-	#define MyAppVersion "1.4.2.2"
+	#define MyAppVersion "1.4.2.3"
 #endif
 #ifndef MyPublisher
 	#define MyPublisher "Audio Visualizer"

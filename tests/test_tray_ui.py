@@ -333,6 +333,7 @@ def test_handoff_keeps_app_running_until_helper_is_ready(make_tray, tmp_path, mo
     import time
     tray = make_tray({})
     tray._ready_update = {"stage": str(tmp_path)}
+    tray.cfg['pending_update'] = tray._ready_update
     tray._update_process = SimpleNamespace(poll=lambda: None)
     tray._handoff_deadline = time.monotonic() + 10
     tray._handoff_timer = SimpleNamespace(stop=lambda: None)
@@ -343,3 +344,4 @@ def test_handoff_keeps_app_running_until_helper_is_ready(make_tray, tmp_path, mo
     (tmp_path / "ready").write_text("ready")
     tray._poll_update_handoff()
     assert quits == [True]
+    assert 'pending_update' not in tray.cfg
