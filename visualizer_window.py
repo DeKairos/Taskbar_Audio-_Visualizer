@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QTimer, QPointF, QPoint, QEvent, QRectF, QRect, pyq
 from PyQt6.QtGui import (
     QPainter, QColor, QBrush, QPen, QPainterPath,
     QRadialGradient, QLinearGradient, QFont, QPixmap,
-    QCursor, QWindow,
+    QCursor,
 )
 from color_themes import get_theme, bar_color, artwork_theme, ThemeTransition
 from ui.monitor_manager import MonitorManager
@@ -28,7 +28,6 @@ WS_EX_NOACTIVATE = 0x08000000
 
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
-HWND_TOP = 0
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
@@ -38,11 +37,6 @@ SW_SHOWNOACTIVATE = 4
 SW_RESTORE = 9
 VK_LBUTTON = 0x01
 user32 = ctypes.windll.user32
-user32.GetParent.argtypes = [ctypes.wintypes.HWND]
-user32.GetParent.restype = ctypes.wintypes.HWND
-user32.GetWindowDpiAwarenessContext.argtypes = [ctypes.wintypes.HWND]
-user32.GetWindowDpiAwarenessContext.restype = ctypes.wintypes.HANDLE
-user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.wintypes.HANDLE, ctypes.wintypes.HANDLE]
 
 
 class VisualizerWindow(QWidget):
@@ -172,8 +166,6 @@ class VisualizerWindow(QWidget):
         self._click_poll_timer.start(40)
 
         self._monitor_mgr = MonitorManager()
-        self._taskbar_host_window = None
-        self._taskbar_host_hwnd = 0
 
         # Media control widgets (optional; created lazily based on config)
         self._media_buttons = {}
@@ -231,8 +223,8 @@ class VisualizerWindow(QWidget):
         # Rising edge only: one trigger per click press.
         if left_pressed and not self._left_pressed_last:
             global_pos = QCursor.pos()
-            widget_pos = self.mapFromGlobal(global_pos)
-            if self.rect().contains(widget_pos):
+            if self.geometry().contains(global_pos):
+                widget_pos = self.mapFromGlobal(global_pos)
                 # If overlay is visible, try the painted/widget media control hit-testing.
                 if self._media_overlay_alpha > 0.01 and (
                     getattr(self, "_media_button_rects", None) or getattr(self, "controls_rects", None)
@@ -280,7 +272,6 @@ class VisualizerWindow(QWidget):
 
         self.setGeometry(vis_x, vis_y, vis_w, vis_h)
         self.show()
-        self._place_on_taskbar((vis_x, vis_y, vis_w, vis_h))
         if not self._application_ui_active():
             self.raise_()
 
@@ -313,56 +304,14 @@ class VisualizerWindow(QWidget):
                 width_mode=self.cfg.get("width_mode", "auto"),
                 alignment_hint=self.cfg.get("alignment_hint", "left"),
             )
-            self._place_on_taskbar(pos, info)
-            self._last_vis_w = pos[2]
+            if (self.x(), self.y(), self.width(), self.height()) != pos:
+                self.setGeometry(*pos)
+                self._last_vis_w = pos[2]
             if self._visibility_recovery_allowed() and not self.isVisible():
                 self.show()
                 self._ensure_topmost(force_bounce=True)
         except Exception:
             return
-
-    def _place_on_taskbar(self, pos, info=None):
-        """Host inside Explorer so shell band changes carry the visualizer too."""
-        index = self.cfg.get("visualizer_monitor", 0)
-        info = info if info is not None else self._monitor_mgr.get_taskbar_info(index)
-        target = QRect(*pos)
-        taskbar = 0
-        # A child is clipped to its parent. Keep standalone behavior for layouts
-        # outside the bar and for 'always' on an auto-hidden taskbar.
-        if (QApplication.platformName() == "windows"
-                and info.get("rect", QRect()).contains(target)
-                and not (info.get("autohide") and
-                         self.cfg.get("taskbar_auto_hide_behavior", "follow") == "always")):
-            taskbar = self._monitor_mgr._find_taskbar_hwnd(index)
-        hwnd = int(self.winId())
-        if taskbar and not user32.AreDpiAwarenessContextsEqual(
-                user32.GetWindowDpiAwarenessContext(hwnd),
-                user32.GetWindowDpiAwarenessContext(taskbar)):
-            # Cross-process parenting with mismatched DPI contexts can reset
-            # process DPI awareness. Preserve standalone rendering instead.
-            taskbar = 0
-        if taskbar != self._taskbar_host_hwnd or (
-                taskbar and user32.GetParent(hwnd) != taskbar):
-            window = self.windowHandle()
-            old_host = self._taskbar_host_window
-            host = QWindow.fromWinId(taskbar) if taskbar else None
-            window.setParent(host)
-            attached = bool(taskbar and host is not None and user32.GetParent(hwnd) == taskbar)
-            if taskbar and not attached:
-                window.setParent(None)
-                if host is not None:
-                    host.deleteLater()
-                host = None
-            self._taskbar_host_window = host
-            self._taskbar_host_hwnd = taskbar if attached else 0
-            # Qt may rewrite native extended styles during reparenting.
-            self._click_through_enabled = None
-            if old_host is not None:
-                old_host.deleteLater()
-        if self._taskbar_host_hwnd:
-            target.translate(-info["rect"].topLeft())
-        if self.geometry() != target:
-            self.setGeometry(target)
 
     def _detect_start_button_x(self, dpi_ratio: float):
         """Legacy method kept for compatibility - delegates to MonitorManager."""
@@ -485,11 +434,8 @@ class VisualizerWindow(QWidget):
             | SWP_NOOWNERZORDER
         )
 
-        if self._taskbar_host_hwnd:
-            # Raise among taskbar children, without changing the shell's order.
-            user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags)
-            return
-        # Standalone fallback: bounce only for explicit recovery to avoid flicker.
+        # Frequent NOTOPMOST->TOPMOST bouncing can cause visible flicker when
+        # interacting with Start/taskbar, so only do it for explicit recovery.
         if force_bounce:
             user32.SetWindowPos(
                 hwnd,

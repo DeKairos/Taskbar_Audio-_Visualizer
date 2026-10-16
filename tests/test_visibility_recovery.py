@@ -55,7 +55,6 @@ def test_reposition_does_not_revive_completed_silence_decay():
     vis.width, vis.height = lambda: 800, lambda: 40
     vis.isVisible = lambda: False
     vis.show = lambda: calls.append('show')
-    vis._place_on_taskbar = lambda *args: None
     VisualizerWindow._maybe_reposition(vis)
     assert calls == []
 
