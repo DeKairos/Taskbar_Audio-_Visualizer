@@ -272,7 +272,8 @@ class VisualizerWindow(QWidget):
 
         self.setGeometry(vis_x, vis_y, vis_w, vis_h)
         self.show()
-        self.raise_()
+        if not self._application_ui_active():
+            self.raise_()
 
         self._ensure_topmost(force_bounce=True)
         self._enable_click_through()
@@ -284,6 +285,8 @@ class VisualizerWindow(QWidget):
 
     def _maybe_reposition(self):
         """Follow taskbar visibility and recover geometry after display/shell changes."""
+        if self._application_ui_active():
+            return
         try:
             index = self.cfg.get("visualizer_monitor", 0)
             info = self._monitor_mgr.get_taskbar_info(index)
@@ -304,7 +307,7 @@ class VisualizerWindow(QWidget):
             if (self.x(), self.y(), self.width(), self.height()) != pos:
                 self.setGeometry(*pos)
                 self._last_vis_w = pos[2]
-            if self.cfg.get("enabled", True) and self._opacity > 0.1 and not self.isVisible():
+            if self._visibility_recovery_allowed() and not self.isVisible():
                 self.show()
                 self._ensure_topmost(force_bounce=True)
         except Exception:
@@ -411,8 +414,17 @@ class VisualizerWindow(QWidget):
         except Exception:
             pass
 
+    def _application_ui_active(self):
+        """Leave Settings, combo popups, tray menus and dialogs above the overlay."""
+        active = QApplication.activeWindow()
+        return (QApplication.activePopupWidget() is not None
+                or QApplication.activeModalWidget() is not None
+                or (active is not None and active is not self))
+
     def _ensure_topmost(self, force_bounce: bool = False):
         """Keep the overlay above taskbar even after taskbar receives clicks."""
+        if self._application_ui_active():
+            return
         hwnd = int(self.winId())
         flags = (
             SWP_NOMOVE
@@ -444,10 +456,24 @@ class VisualizerWindow(QWidget):
             flags,
         )
 
+    def _visibility_recovery_allowed(self):
+        """Recover shell interference only while the overlay should be visible."""
+        return (
+            self.cfg.get("enabled", True)
+            and not self._taskbar_suppressed
+            and self._opacity > 0
+            and not (self.cfg.get("auto_hide", True) and self._decay_progress >= 1.0)
+        )
+
     def _refresh_window_styles(self):
-        if self.cfg.get("enabled", True):
-            self._restore_win32_visibility()
-            self._restore_if_minimized_or_hidden()
+        # Raising/restoring a background window can deactivate a combo popup.
+        # The periodic timer will recover the overlay once interactive UI closes.
+        if self._application_ui_active():
+            return
+        if not self._visibility_recovery_allowed():
+            return
+        self._restore_win32_visibility()
+        self._restore_if_minimized_or_hidden()
         self._ensure_topmost(force_bounce=False)
         # If media controls are implemented as widgets and the overlay is visible,
         # keep window interactive so child buttons can receive mouse events.
@@ -495,7 +521,7 @@ class VisualizerWindow(QWidget):
     def hideEvent(self, event):
         """Recover when shell temporarily hides the overlay (e.g., Start open)."""
         super().hideEvent(event)
-        if self.cfg.get("enabled", True) and self._opacity > 0:
+        if self._visibility_recovery_allowed():
             QTimer.singleShot(0, self._refresh_window_styles)
 
     def mousePressEvent(self, event):

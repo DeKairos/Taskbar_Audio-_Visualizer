@@ -7,8 +7,8 @@ Param(
 
 $ErrorActionPreference = "Stop"
 
-if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') {
-    throw "Invalid version '$Version'. Use semver like 1.0.1, 1.1.0, or 2.0.0-rc.1"
+if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z.-]+)?$') {
+    throw "Invalid version '$Version'. Use a version like 1.4.2, 1.4.2.1, or 2.0.0-rc.1"
 }
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

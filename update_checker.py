@@ -25,19 +25,25 @@ RELEASES_LATEST_WEB_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/rele
 INSTALLER_ASSET_REGEX = re.compile(r"^AudioVisualizer-Setup-.*\.exe$", re.IGNORECASE)
 
 
-def _parse_semver(value: str) -> tuple[int, int, int]:
-    """Extract and normalize x.y.z from values like v1.2.3 or 1.2.3-beta."""
-    if not value:
-        return (0, 0, 0)
-    m = re.search(r"(\d+)\.(\d+)\.(\d+)", value)
-    if not m:
-        return (0, 0, 0)
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+VERSION_PATTERN = r"\d+\.\d+\.\d+(?:\.\d+)?"
+
+
+def _extract_version(value: str) -> str:
+    match = re.search(r"(?<![\d.])(" + VERSION_PATTERN + r")(?![\d.])", value or "")
+    return match.group(1) if match else ""
+
+
+def _parse_semver(value: str) -> tuple[int, int, int, int]:
+    """Compare three-part versions and optional Windows hotfix revisions."""
+    version = _extract_version(value)
+    if not version:
+        return (0, 0, 0, 0)
+    parts = tuple(int(part) for part in version.split('.'))
+    return parts + (0,) * (4 - len(parts))
 
 
 def _is_valid_semver(value: str) -> bool:
-    """Return True for semver-like values such as 1.2.3 or 1.2.3-rc.1."""
-    return bool(re.match(r"^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$", value or ""))
+    return bool(re.fullmatch(VERSION_PATTERN + r"([+-][0-9A-Za-z.-]+)?", value or ""))
 
 
 def _current_version_from_git(timeout: float = 2.5) -> str | None:
@@ -54,8 +60,7 @@ def _current_version_from_git(timeout: float = 2.5) -> str | None:
         ).stdout.strip()
         if not out:
             return None
-        m = re.search(r"(\d+\.\d+\.\d+)", out)
-        return m.group(1) if m else None
+        return _extract_version(out) or None
     except Exception:
         return None
 
@@ -63,7 +68,7 @@ def _current_version_from_git(timeout: float = 2.5) -> str | None:
 def _select_highest_semver_tag(tag_names: list[str]) -> str:
     """Pick the highest semver-like tag name from a list of tag names."""
     best_name = ""
-    best_semver = (0, 0, 0)
+    best_semver = (0, 0, 0, 0)
     for name in tag_names:
         sem = _parse_semver(name)
         if sem > best_semver:
@@ -83,9 +88,9 @@ def get_current_version() -> str:
                     continue
                 with open(version_file, "r", encoding="utf-8-sig") as f:
                     first = f.readline().strip()
-                m = re.search(r"(\d+\.\d+\.\d+)", first)
-                if m:
-                    return m.group(1)
+                version = _extract_version(first)
+                if version:
+                    return version
         except Exception:
             pass
 
@@ -213,12 +218,12 @@ def _latest_version_from_git_tags(timeout: float = 8.0):
 
         best_name = _select_highest_semver_tag(tag_names)
         best_ver = _parse_semver(best_name)
-        if best_ver == (0, 0, 0):
+        if best_ver == (0, 0, 0, 0):
             return None
 
         web_url = _normalize_repo_web_url(remote)
         return {
-            "latest_version": ".".join(str(x) for x in best_ver),
+            "latest_version": _extract_version(best_name),
             "release_name": best_name,
             "release_url": f"{web_url}/releases" if web_url else "",
             "release_notes": "",
@@ -245,10 +250,10 @@ def _latest_version_from_web_release(timeout: float = 6.0):
 
         tag_name = urllib.parse.unquote(m.group(1))
         sem = _parse_semver(tag_name)
-        if sem == (0, 0, 0):
+        if sem == (0, 0, 0, 0):
             return None
 
-        latest_version = ".".join(str(x) for x in sem)
+        latest_version = _extract_version(tag_name)
         installer_asset_name = f"AudioVisualizer-Setup-{latest_version}.exe"
         installer_asset_url = (
             f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest/download/"
@@ -271,10 +276,10 @@ def _latest_version_from_releases_api(timeout: float = 6.0):
     data = _fetch_json(RELEASES_URL, timeout)
     latest_raw = str(data.get("tag_name") or data.get("name") or "")
     latest_semver = _parse_semver(latest_raw)
-    if latest_semver == (0, 0, 0):
+    if latest_semver == (0, 0, 0, 0):
         return None
 
-    latest_version = ".".join(str(x) for x in latest_semver)
+    latest_version = _extract_version(latest_raw)
     installer_asset_url, installer_asset_name = _select_installer_asset(data.get("assets") or [])
     return {
         "latest_version": latest_version,
@@ -298,11 +303,11 @@ def _latest_version_from_tags_api(timeout: float = 6.0):
         return None
 
     latest_semver = _parse_semver(tag_name)
-    if latest_semver == (0, 0, 0):
+    if latest_semver == (0, 0, 0, 0):
         return None
 
     return {
-        "latest_version": ".".join(str(x) for x in latest_semver),
+        "latest_version": _extract_version(tag_name),
         "release_url": f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag_name}",
         "release_name": tag_name or "Latest tag",
         "release_notes": "",

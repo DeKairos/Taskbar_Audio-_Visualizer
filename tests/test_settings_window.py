@@ -53,6 +53,21 @@ def _label_texts(widget):
     return [lbl.text() for lbl in widget.findChildren(QLabel)]
 
 
+def test_quit_button_is_reachable_on_every_settings_page(make_window):
+    window = make_window()
+    requests = []
+    window.quit_requested.connect(lambda: requests.append(True))
+    for name in window._pages:
+        window._navigate(name)
+        QApplication.processEvents()
+        button = window.quit_button
+        assert button.isVisible()
+        assert window.rect().contains(button.mapTo(window, button.rect().topLeft()))
+        assert window.rect().contains(button.mapTo(window, button.rect().bottomRight()))
+    window.quit_button.click()
+    assert requests == [True]
+
+
 def test_tall_pages_scroll_at_minimum_size(make_window):
     window = make_window()
     scroll = window._scroll_area

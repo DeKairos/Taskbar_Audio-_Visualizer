@@ -69,7 +69,7 @@ The `Release on Tag` workflow publishes all of the following assets:
 Release workflow behavior:
 
 - Trigger: push a tag like `v1.2.3`
-- Version parsing: strips `v` prefix and uses the exact semver value for filenames
+- Version parsing: strips `v` and preserves three-part releases or four-part hotfix versions such as `1.4.2.1` for filenames
 - Validation: workflow fails if any required asset is missing
 - Uploads: only exact versioned asset paths are attached to the GitHub Release
 

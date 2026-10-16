@@ -344,7 +344,7 @@ The installer uses `assets/app_icon.ico` for setup branding and Start menu short
 
 ## Version Tags And GitHub Releases
 
-This project now supports semantic version tags in `vX.Y.Z` format (for example, `v1.0.1` or `v1.1.0`).
+This project supports `vX.Y.Z` release tags and an optional Windows hotfix revision, such as `v1.4.2.1`. Four-part versions are retained in About, build metadata, and update comparisons.
 
 ### Option A: Create And Push A Tag Locally (PowerShell)
 

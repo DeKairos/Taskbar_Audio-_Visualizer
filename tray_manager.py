@@ -140,6 +140,7 @@ class TrayManager(QSystemTrayIcon):
                 self._settings_snapshot = deepcopy(self.cfg)
                 self._settings_win = SettingsWindow(self.cfg)
                 self._settings_win.config_changed.connect(self._on_settings_changed)
+                self._settings_win.quit_requested.connect(self._quit)
             self._settings_win.show()
             self._settings_win.raise_()
             self._settings_win.activateWindow()

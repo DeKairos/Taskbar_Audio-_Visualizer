@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Semver version without v prefix (example: 1.2.3)"
+        description: "Semver version without v prefix (example: 1.2.3 or 1.2.3.1)"
         required: true
         type: string
 
@@ -24,8 +24,8 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.version }}"
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid version '$VERSION'. Use semver like 1.2.3 or 1.2.3-rc.1"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version '$VERSION'. Use a version like 1.4.2, 1.4.2.1 or 1.2.3-rc.1"
             exit 1
           fi
 

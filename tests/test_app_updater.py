@@ -25,6 +25,13 @@ def test_missing_checksum_and_development_runs_use_manual_release_page():
     assert app_updater.select_update_asset(release, "development") is None
 
 
+def test_hotfix_installer_is_selected_without_dropping_revision():
+    asset = {'name': 'AudioVisualizer-Setup-1.4.2.1.exe', 'digest': 'sha256:' + 'a' * 64,
+             'browser_download_url': 'https://github.com/example/update.exe'}
+    release = {'latest_version': '1.4.2.1', 'release_assets': [asset]}
+    assert app_updater.select_update_asset(release, 'installed')['name'] == asset['name']
+
+
 @pytest.mark.parametrize("extra", ["../escape.exe", "_internal/../../escape.exe", "C:/escape.exe",
     "other.exe", "_internal/link", "_internal/.. /escape.exe"])
 def test_zip_rejects_unexpected_or_unsafe_paths(tmp_path, extra):

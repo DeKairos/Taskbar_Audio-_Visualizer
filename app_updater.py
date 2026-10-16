@@ -43,7 +43,7 @@ def installation_kind():
 
 def select_update_asset(release, kind):
     version = release.get("latest_version", "")
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", version):
         return None
     patterns = {
         "installed": f"AudioVisualizer-Setup-{version}.exe",

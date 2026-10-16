@@ -106,6 +106,45 @@ def test_menu_keeps_existing_action_set(make_tray):
     assert any(action.isSeparator() for action in actions)
 
 
+def test_settings_quit_uses_existing_shutdown_action_once(make_tray, monkeypatch):
+    tray = make_tray({})
+    requests = []
+    monkeypatch.setattr(tray, '_quit', lambda: requests.append(True))
+    tray._open_settings()
+    window = tray._settings_win
+    try:
+        tray._open_settings()  # Reopening must not duplicate the signal connection.
+        window.quit_button.click()
+        assert requests == [True]
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_settings_quit_stops_capture_before_exiting(make_tray, monkeypatch):
+    tray = make_tray({})
+    calls = []
+    tray.audio_thread = SimpleNamespace(stop=lambda: calls.append('audio stopped'))
+    tray.vis.timer = SimpleNamespace(stop=lambda: calls.append('animation stopped'))
+    tray.vis.volume_scroller = None
+    tray.vis.media_click_watcher = None
+    tray.vis.media_monitor = SimpleNamespace(stop=lambda: calls.append('media stopped'))
+    tray.vis.close = lambda: calls.append('overlay closed')
+    monkeypatch.setattr(QApplication, 'quit', lambda: calls.append('app exited'))
+    tray._open_settings()
+    window = tray._settings_win
+    try:
+        window.quit_button.click()
+        assert calls == ['animation stopped', 'audio stopped', 'media stopped',
+                         'overlay closed', 'app exited']
+        assert tray._shutting_down
+        assert not tray._tray_timer.isActive()
+        assert not tray._auto_update_timer.isActive()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
 def test_settings_edit_preserves_tray_visibility_and_update_state(make_tray):
     from copy import deepcopy
     from config_manager import DEFAULTS

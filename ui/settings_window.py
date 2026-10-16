@@ -886,6 +886,7 @@ class _ScrollContent(QWidget):
 
 class SettingsWindow(QWidget):
     config_changed = pyqtSignal(dict)
+    quit_requested = pyqtSignal()
 
     NAV_ITEMS = [
         ("General", "\u2699"),
@@ -955,6 +956,27 @@ class SettingsWindow(QWidget):
             self._nav_buttons.append(btn)
 
         sidebar_layout.addStretch()
+        self.quit_button = QPushButton("Quit Audio Visualizer")
+        self.quit_button.setObjectName("quitAppButton")
+        self.quit_button.setAccessibleName("Quit Audio Visualizer")
+        self.quit_button.setToolTip("Stop the visualizer and exit the background app.")
+        self.quit_button.setMinimumHeight(36)
+        self.quit_button.setStyleSheet(f"""
+            QPushButton {{
+                color: rgba(255,255,255,220);
+                background: rgba(255,255,255,8);
+                border: 1px solid rgba(255,255,255,25);
+                border-radius: {RADIUS_MEDIUM}px;
+                padding: 6px;
+                font-family: {FONT_FAMILY}, Segoe UI;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background: rgba(255,255,255,18); }}
+            QPushButton:pressed {{ background: rgba(255,255,255,5); }}
+            QPushButton:focus {{ border: 1px solid #60cdff; }}
+        """)
+        self.quit_button.clicked.connect(lambda _checked=False: self.quit_requested.emit())
+        sidebar_layout.addWidget(self.quit_button)
         card_layout.addWidget(sidebar)
 
         # ─── Content Pages ────────────────────────────────────────
