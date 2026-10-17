@@ -46,6 +46,7 @@ def main():
             # or module that loads only when the tray/settings UI starts.
             from audio_capture import AudioCaptureThread
             from visualizer_window import VisualizerWindow
+            from ui.native_taskbar import TaskbarVisualizerWindow
             from tray_manager import TrayManager
             from ui.settings_window import SettingsWindow
             from media_monitor import MediaMonitor
@@ -62,7 +63,7 @@ def main():
     import comtypes
     comtypes.CoInitialize()
     from audio_capture import AudioCaptureThread
-    from visualizer_window import VisualizerWindow
+    from ui.native_taskbar import TaskbarVisualizerWindow
     from tray_manager import TrayManager
     from config_manager import load_config
     from media_monitor import MediaMonitor
@@ -108,7 +109,7 @@ def main():
     except Exception:
         pass
 
-    visualizer = VisualizerWindow(config)
+    visualizer = TaskbarVisualizerWindow(config)
 
     audio_thread = AudioCaptureThread(config)
     audio_thread.fft_data_ready.connect(visualizer.update_fft)
@@ -123,7 +124,7 @@ def main():
     visualizer.media_monitor = media_monitor
 
     # Clicking on visualizer area reveals now-playing overlay on demand.
-    # Handled by a safe UI-thread polling timer in VisualizerWindow.
+    # Background clicks reveal the card; native button events control playback.
 
     tray = TrayManager(visualizer, audio_thread, config, app.windowIcon())
     tray.show()

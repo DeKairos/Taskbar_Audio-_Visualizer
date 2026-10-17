@@ -29,7 +29,7 @@ winget install --id JRSoftware.InnoSetup -e --accept-package-agreements --accept
 ## Build App Bundle
 
 ```powershell
-.\build_release.ps1 -Version 1.0.1
+.\build_release.ps1 -Version 1.4.3
 ```
 
 For a local rebuild using an already validated environment, add
@@ -45,18 +45,18 @@ Expected output:
 ## Build App Bundle And Installer
 
 ```powershell
-.\package_release.ps1 -Version 1.0.1
+.\package_release.ps1 -Version 1.4.3
 ```
 
 Expected outputs:
 
 - `dist/AudioVisualizer`
-- `dist/AudioVisualizer-Setup-1.0.1.exe`
+- `dist/AudioVisualizer-Setup-1.4.3.exe`
 
-Verified local run (2026-03-22):
+Current release target: **1.4.3**. The build verifies version, resources and runtime imports:
 
 - `dist/AudioVisualizer` created successfully
-- `dist/AudioVisualizer-Setup-1.0.1.exe` created successfully
+- `dist/AudioVisualizer-Setup-1.4.3.exe` created successfully
 
 ## GitHub Tag Release Outputs
 
@@ -76,16 +76,17 @@ Release workflow behavior:
 ## Create Tag
 
 ```powershell
-.\create_semver_tag.ps1 -Version 1.0.1
+.\create_semver_tag.ps1 -Version 1.4.3
 ```
 
 ## Quick Validation Before Release
 
 1. Launch built app from `dist/AudioVisualizer/AudioVisualizer.exe`.
 2. Confirm tray icon appears.
-3. Play audio and confirm visualizer movement.
-4. Run standalone portable exe `dist/AudioVisualizer-Portable-<version>.exe` on a clean machine.
-5. Run installer and validate launch from Start Menu.
+3. Play audio and confirm visualizer movement, fixed bar density, and visibility while Quick Settings opens/closes.
+4. Check previous/play-pause/next without focusing the taskbar, and check silence hide/resume.
+5. Run standalone portable exe `dist/AudioVisualizer-Portable-<version>.exe` on a clean machine.
+6. Run installer and validate launch from Start Menu.
 
 ## Cross-Machine Release Checklist
 
@@ -106,14 +107,14 @@ Use this before uploading a release for other users:
 Remove-Item .\build -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item .\dist -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item .\AudioVisualizer.spec -Force -ErrorAction SilentlyContinue
-.\package_release.ps1 -Version 1.0.1
+.\package_release.ps1 -Version 1.4.3
 ```
 
 - If it still fails, pin PyInstaller and retry:
 
 ```powershell
 .\venv_win\Scripts\python.exe -m pip install "pyinstaller==6.16.0" "pyinstaller-hooks-contrib<2026"
-.\package_release.ps1 -Version 1.0.1
+.\package_release.ps1 -Version 1.4.3
 ```
 
 
@@ -165,3 +166,15 @@ Before release, also perform an old-version-to-new-version upgrade in a clean
 Windows VM using the real Inno Setup installer, with startup both enabled and
 disabled. Source changes need a newly published release before existing users
 receive them. Older clients retain their old update flow for that first upgrade.
+
+## Native renderer release boundary
+
+`main.py` starts `ui.native_taskbar.TaskbarVisualizerWindow`. Its Qt widget stays
+off-screen; a separate native taskbar child displays the rendered image. Do not
+reparent the Qt window, reintroduce an extra `QWidget.update()` repaint, or reduce
+spectrum bin counts to lower adaptive quality. Native clicks own visible transport
+buttons; the background poller only reveals the card.
+
+Tests cover stable bar geometry, compact control bounds, native DPI mapping,
+single-dispatch clicks, shell recovery and ordered media-session commands. See
+[PREPUSH_VALIDATION.md](PREPUSH_VALIDATION.md) for release evidence and limits.

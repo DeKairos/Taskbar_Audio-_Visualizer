@@ -41,3 +41,14 @@ this visibility preference; the app does not override it.
 After installing a build with these changes, close any older running copy and
 launch the updated app. Updating project files does not change an already
 running executable.
+
+## Updating to 1.4.3
+
+This release fixes changing bar density, compact button placement, focus-dependent
+playback commands and duplicate repaint work. Exit any diagnostic portable test
+EXE before launching the installed release; a running older copy can prevent the
+new instance from starting. Use the official installer, standalone EXE or portable
+ZIP from the release page. Your existing settings remain in place.
+
+Update retries use separate attempt folders and preserve previous backups. An
+exclusive lock prevents overlapping helpers for the same staged download.

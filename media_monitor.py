@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 import ctypes
+import queue
 from color_themes import artwork_accent
 
 try:
@@ -44,6 +45,7 @@ class MediaInfo:
         "accent_rgb",
         "cover_bytes",
         "changed",
+        "source_app_id",
     )
 
     def __init__(self):
@@ -53,6 +55,7 @@ class MediaInfo:
         self.accent_rgb: tuple = (80, 200, 240)   # default cyan
         self.cover_bytes: bytes | None = None
         self.changed: bool = False
+        self.source_app_id: str = ""
 
 
 class MediaMonitor:
@@ -65,6 +68,7 @@ class MediaMonitor:
         self._running = False
         self._thread = None
         self._stop_event = threading.Event()
+        self._commands = queue.Queue()
 
     def start(self):
         if not HAS_WINSDK:
@@ -72,6 +76,12 @@ class MediaMonitor:
             return
         if self._thread and self._thread.is_alive():
             return
+        # Discard commands from a previous run, including its stop sentinel.
+        while True:
+            try:
+                self._commands.get_nowait()
+            except queue.Empty:
+                break
         self._stop_event.clear()
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -81,6 +91,7 @@ class MediaMonitor:
     def stop(self):
         self._running = False
         self._stop_event.set()
+        self._commands.put(None)
         thread = self._thread
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=max(1.0, self.interval + 1.0))
@@ -89,12 +100,26 @@ class MediaMonitor:
     # ── internal ────────────────────────────────────────────────────
 
     def _loop(self):
+        next_poll = 0.0
         while self._running and not self._stop_event.is_set():
+            if time.monotonic() >= next_poll:
+                try:
+                    asyncio.run(self._poll_once())
+                except Exception:
+                    traceback.print_exc()
+                next_poll = time.monotonic() + self.interval
             try:
-                asyncio.run(self._poll_once())
-            except Exception:
-                traceback.print_exc()
-            self._stop_event.wait(self.interval)
+                command = self._commands.get(timeout=max(0.0, next_poll - time.monotonic()))
+            except queue.Empty:
+                continue
+            if not self._running or command is None:
+                continue
+            action, source_app_id = command
+            try:
+                accepted = asyncio.run(asyncio.wait_for(self._control_session(action, source_app_id), 3.0))
+                print(f"[MediaMonitor] session control {action}: {'accepted' if accepted else 'unavailable'}")
+            except Exception as exc:
+                print(f"[MediaMonitor] session control {action} failed: {exc}")
 
     async def _poll_once(self):
         manager = await SessionManager.request_async()
@@ -121,6 +146,7 @@ class MediaMonitor:
             snapshot.title = title
             snapshot.artist = artist
             snapshot.album = album
+            snapshot.source_app_id = getattr(session, "source_app_user_model_id", "") or ""
             snapshot.changed = True
 
             # Try to extract album art dominant colour
@@ -155,12 +181,34 @@ class MediaMonitor:
             self._prev_key = key
             self.info = snapshot
 
-    # ── Transport control (fallback to media-key simulation) ───────
+    # ── Transport control (target the session displayed on the card) ───────
+    async def _control_session(self, action, source_app_id):
+        manager = await SessionManager.request_async()
+        if source_app_id:
+            session = next((item for item in manager.get_sessions()
+                            if item.source_app_user_model_id == source_app_id), None)
+        else:
+            session = manager.get_current_session()
+        if session is None:
+            return False
+        method = {
+            'play': 'try_play_async', 'pause': 'try_pause_async',
+            'toggle_play_pause': 'try_toggle_play_pause_async',
+            'next_track': 'try_skip_next_async', 'previous_track': 'try_skip_previous_async',
+        }[action]
+        return bool(await getattr(session, method)())
+
+    def _request_transport(self, action, fallback_key):
+        if not HAS_WINSDK:
+            self._send_media_key(fallback_key)
+            return
+        self.start()
+        self._commands.put((action, self.info.source_app_id))
+
     def _send_media_key(self, vk: int):
         """Send a multimedia key (via Win32) as a best-effort transport control.
 
-        This is used as a lightweight fallback when WinRT control APIs are
-        unavailable or to avoid blocking asyncio loops.
+        Used only when the WinRT module is unavailable.
         """
         try:
             # key down
@@ -173,25 +221,24 @@ class MediaMonitor:
             print(f"[MediaMonitor] failed to send media key 0x{vk:02X}")
 
     def play(self):
-        """Attempt to start playback (toggle/play-pause fallback)."""
-        # Use media key toggle as safe default
-        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+        """Request playback on the displayed media session."""
+        self._request_transport('play', VK_MEDIA_PLAY_PAUSE)
 
     def pause(self):
-        """Attempt to pause playback (toggle/play-pause fallback)."""
-        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+        """Request pause on the displayed media session."""
+        self._request_transport('pause', VK_MEDIA_PLAY_PAUSE)
 
     def toggle_play_pause(self):
         """Toggle playback state."""
-        self._send_media_key(VK_MEDIA_PLAY_PAUSE)
+        self._request_transport('toggle_play_pause', VK_MEDIA_PLAY_PAUSE)
 
     def next_track(self):
         """Skip to next track."""
-        self._send_media_key(VK_MEDIA_NEXT_TRACK)
+        self._request_transport('next_track', VK_MEDIA_NEXT_TRACK)
 
     def previous_track(self):
         """Skip to previous track."""
-        self._send_media_key(VK_MEDIA_PREV_TRACK)
+        self._request_transport('previous_track', VK_MEDIA_PREV_TRACK)
 
     @staticmethod
     def _dominant_color(img_bytes: bytes):

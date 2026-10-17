@@ -4,6 +4,8 @@
 
 - main.py
 - visualizer_window.py
+- ui/native_taskbar.py
+- core/spectrum.py
 - audio_capture.py
 - media_monitor.py
 - tray_manager.py
@@ -37,3 +39,11 @@ Purpose: build executable artifacts and Windows installer output.
 - Build script: `build_release.ps1`
 - Full package script: `package_release.ps1`
 - Installer definition: `installer/AudioVisualizer.iss`
+
+## Native rendering and media transport
+
+`main.py` constructs `TaskbarVisualizerWindow` from `ui/native_taskbar.py`.
+`VisualizerWindow` supplies the off-screen animation and card drawing. The native
+module submits frames, handles scaled button input and recovers the taskbar host.
+`media_monitor.py` serializes direct WinRT transport commands for the session
+identified by the displayed metadata snapshot.

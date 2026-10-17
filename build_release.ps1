@@ -1,5 +1,5 @@
 Param(
-    [string]$Version = "1.4.2.5",
+    [string]$Version = "1.4.3",
     [string]$CompanyName = "Audio Visualizer",
     [string]$ProductName = "Audio Visualizer",
     [string]$FileDescription = "Windows taskbar audio visualizer",

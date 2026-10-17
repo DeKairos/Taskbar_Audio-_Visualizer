@@ -65,9 +65,10 @@ preferences. Changes apply and save automatically.
 
 #### Click-Through Behavior
 
-- The visualizer is **always click-through** — clicks pass through to the taskbar/apps
-- The visualizer is periodically re-applied as **topmost**, so taskbar clicks should not push it behind
-- This allows seamless interaction with taskbar icons
+- Background clicks pass through to the taskbar/apps. Visible transport buttons accept native mouse input.
+- A native taskbar child displays off-screen Qt frames without reparenting the Qt window.
+- Playback buttons target the displayed media session without focusing the taskbar.
+- Dynamic Quality keeps the configured bar count; only effects are reduced.
 
 ## Stopping the Visualizer
 

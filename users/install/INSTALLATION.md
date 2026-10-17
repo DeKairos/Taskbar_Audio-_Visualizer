@@ -11,7 +11,7 @@ Use this option for the easiest, no-hassle install.
 1. Download the installer file: `AudioVisualizer-Setup-x.y.z.exe`.
 2. Double-click the installer and follow the setup wizard.
 3. Launch Audio Visualizer from Start Menu or Desktop shortcut.
-4. Look for the tray icon (cyan circle) near the Windows clock.
+4. Look for the tray icon (cyan equalizer) near the Windows clock.
 
 Notes:
 
@@ -65,7 +65,7 @@ After launching, verify:
 
 - Tray icon is visible
 - Taskbar visualizer appears when audio is playing
-- Right-click tray icon opens settings
+- Left-click the tray icon opens Settings; right-click opens its menu
 
 ## Uninstall
 

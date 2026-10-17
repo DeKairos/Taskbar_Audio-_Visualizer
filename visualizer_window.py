@@ -170,7 +170,7 @@ class VisualizerWindow(QWidget):
         # Media control widgets (optional; created lazily based on config)
         self._media_buttons = {}
         mcfg = self.cfg.get("media_controls", {}) or {}
-        self._use_widget_buttons = bool(mcfg.get("use_widgets", True))
+        self._use_widget_buttons = bool(mcfg.get("use_widgets", True)) and getattr(self, "_supports_widget_controls", True)
         if self._use_widget_buttons:
             size = int(mcfg.get("size", 36) or 36)
             icon_font = QFont("Segoe UI Symbol", max(10, int(size * 0.5)))
@@ -1091,16 +1091,10 @@ class VisualizerWindow(QWidget):
             p.setBrush(QBrush(QColor(r, g, b, min(56, alpha))))
             p.drawEllipse(QPointF(pt["x"], pt["y"]), pt["size"], pt["size"])
 
-    def _quality_stride(self) -> int:
-        if self._quality_level == "low":
-            return 3
-        if self._quality_level == "medium":
-            return 2
-        return 1
-
     def _sampled_bins(self):
-        stride = self._quality_stride()
-        return self.fft_data[::stride], self.peak_caps[::stride]
+        # Adaptive effects must not change bar count, spacing, or peak positions.
+        # Dropping bins makes the layout jump whenever frame cost changes quality.
+        return self.fft_data, self.peak_caps
 
     def _display_max_value(self, values: np.ndarray, peak_caps: np.ndarray | None = None) -> float:
         """Return a stable normalization reference so visuals can naturally settle to baseline."""
@@ -1811,6 +1805,19 @@ class VisualizerWindow(QWidget):
         box_y = int((h - box_h) / 2)
         return QRect(box_x, box_y, box_w, box_h)
 
+    def _compact_media_control_rects(self, box: QRect):
+        """Right-align transport controls within a short taskbar card."""
+        mcfg = self.cfg.get("media_controls", {}) or {}
+        padding = max(4, min(10, box.height() // 5))
+        size = max(1, min(int(mcfg.get("size", 36) or 36), box.height() - 2 * padding))
+        spacing = max(3, min(int(mcfg.get("spacing", 6) or 6), max(3, size // 4)))
+        size = max(1, min(size, (box.width() - 2 * padding - 2 * spacing) // 3))
+        total_w = size * 3 + spacing * 2
+        start_x = box.x() + box.width() - padding - total_w
+        y = box.y() + (box.height() - size) // 2
+        return {name: QRect(start_x + i * (size + spacing), y, size, size)
+                for i, name in enumerate(("prev", "play", "next"))}
+
 
     def _paint_volume_overlay(self, p: QPainter, w: int, h: int):
         """Draw volume percentage on right side of visualizer."""
@@ -1953,7 +1960,8 @@ class VisualizerWindow(QWidget):
         # Calculate button area height to reserve space at the bottom
         mcfg = self.cfg.get("media_controls", {}) or {}
         skip_buttons = self._use_widget_buttons and mcfg.get("use_widgets", False) and not mcfg.get("use_paint_fallback", False)
-        if skip_buttons:
+        compact_controls = box_h < 80
+        if skip_buttons or compact_controls:
             controls_reserve_h = 0
         else:
             small_btn = int(max(22, min(44, box_h * 0.18)))
@@ -1969,8 +1977,10 @@ class VisualizerWindow(QWidget):
         left_offset = (cover_size + cover_gap) if show_cover_slot else 0
         title_rect_x = box_x + pad_x + left_offset
         title_rect_w = box_w - (pad_x * 2) - left_offset
-        if title_rect_w < 30:
-            return
+        if compact_controls:
+            controls = self._compact_media_control_rects(QRect(box_x, box_y, box_w, box_h))
+            title_rect_w = min(title_rect_w, controls["prev"].left() - 8 - title_rect_x)
+        title_rect_w = max(0, title_rect_w)
         title_rect_y = top_y
 
         # Elide title to fit.
@@ -2025,7 +2035,7 @@ class VisualizerWindow(QWidget):
         try:
             self._invoke_media_action(name)
             # Keep the overlay visible briefly to provide feedback
-            self._media_overlay_started_at = time.time()
+            self._media_overlay_started_at = time.monotonic()
         except Exception as e:
             print(f"[Visualizer] media control {name} failed: {e}")
 
@@ -2071,8 +2081,8 @@ class VisualizerWindow(QWidget):
     def draw_media_controls(self, p: QPainter):
         """Paint modern glassmorphic media transport controls.
 
-        This method draws three circular buttons centered horizontally inside
-        the now-playing card, applies hover glow and scale transforms, and
+        Compact cards place buttons on the right beside metadata; taller cards
+        use a separate row. Applies hover glow and scale transforms, and
         updates self.controls_rects for hit-testing.
         """
         alpha = max(0.0, min(1.0, getattr(self, "_media_overlay_alpha", 1.0)))
@@ -2106,6 +2116,11 @@ class VisualizerWindow(QWidget):
         play_rect = QRect(start_x + small_btn + btn_spacing, btn_y, play_btn, play_btn)
         next_rect = QRect(start_x + small_btn + btn_spacing + play_btn + btn_spacing, btn_y + (play_btn - small_btn) // 2, small_btn, small_btn)
 
+        compact = box_h < 80
+        if compact:
+            rects = self._compact_media_control_rects(box)
+            prev_rect, play_rect, next_rect = (rects[name] for name in ("prev", "play", "next"))
+
         # Expose hit-rects for polling / event handlers
         self.controls_rects = {"prev": prev_rect, "play": play_rect, "next": next_rect}
         # Keep backward-compatible name used elsewhere
@@ -2116,6 +2131,11 @@ class VisualizerWindow(QWidget):
         ctrl_bg_h = play_btn + 14
         ctrl_bg_x = int(box_x + (box_w - ctrl_bg_w) / 2)
         ctrl_bg_y = int(btn_y - 6)
+        if compact:
+            controls_bounds = prev_rect.united(play_rect).united(next_rect)
+            background = controls_bounds.adjusted(-4, -3, 4, 3).intersected(box)
+            ctrl_bg_x, ctrl_bg_y = background.x(), background.y()
+            ctrl_bg_w, ctrl_bg_h = background.width(), background.height()
 
         radius = 14
         path = QPainterPath()
@@ -2249,7 +2269,7 @@ class VisualizerWindow(QWidget):
                         except Exception:
                             pass
                     # keep overlay visible so user gets feedback
-                    self._media_overlay_started_at = time.time()
+                    self._media_overlay_started_at = time.monotonic()
                     return True
         except Exception:
             pass

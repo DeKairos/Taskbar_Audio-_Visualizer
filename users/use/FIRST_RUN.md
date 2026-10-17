@@ -6,7 +6,9 @@ Use this checklist immediately after installation.
 2. Confirm the tray icon appears near the Windows clock.
 3. Play audio from any app.
 4. Verify the taskbar visualizer animates.
-5. Left-click the tray icon (or right-click → **Settings...**) to adjust mode, theme, and sensitivity.
+5. Click the visualizer to reveal the song card. Test previous, play/pause and next without clicking the taskbar first.
+6. Open and close Windows Quick Settings while audio plays; the visualizer should keep animating.
+7. Left-click the tray icon (or right-click → **Settings...**) to adjust mode, theme, and sensitivity.
 
 ## Common Controls
 

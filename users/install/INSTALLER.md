@@ -55,8 +55,10 @@ If you installed with the setup EXE, you can update from inside the app:
 
 1. Open tray menu.
 2. Click Check for updates.
-3. If a new version exists, click Download and Install.
-4. The app downloads the latest setup file, starts the installer, then exits.
+3. Download the offered update.
+4. Choose **Restart to update** once the verified download is ready. The helper applies the update and relaunches the app.
+
+See [Updating Audio Visualizer](../use/UPDATES.md) for retry and rollback behavior.
 
 Notes:
 
