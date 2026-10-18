@@ -4,6 +4,13 @@ A Windows taskbar audio visualizer built with PyQt6 and a native Windows surface
 It captures system audio, animates its frequency spectrum, and shows a compact
 now-playing card with album art and playback controls.
 
+## See it in action
+
+[![Watch Audio Visualizer: your taskbar has a nightlife](assets/demo/audio-visualizer-poster.jpg)](assets/demo/audio-visualizer.mp4)
+
+[Watch the 22-second launch video](assets/demo/audio-visualizer.mp4) — real app
+footage showing the taskbar spectrum, artwork colors, modes, and effects.
+
 ## Release 1.4.3
 
 - A native taskbar surface displays frames drawn off-screen by Qt. The Qt window

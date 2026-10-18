@@ -14,6 +14,9 @@ build/
 dist/
 *.spec
 
+# Local launch-video renders and working files (published media lives in assets/demo)
+/brag-output*/
+
 # Logs/runtime
 *.log
 
