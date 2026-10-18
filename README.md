@@ -6,10 +6,10 @@ now-playing card with album art and playback controls.
 
 ## See it in action
 
-[![Watch Audio Visualizer: your taskbar has a nightlife](assets/demo/audio-visualizer-poster.jpg)](assets/demo/audio-visualizer.mp4)
+https://github.com/user-attachments/assets/6f486681-2147-4c6f-a682-d3c68bd16798
 
-[Watch the 22-second launch video](assets/demo/audio-visualizer.mp4) — real app
-footage showing the taskbar spectrum, artwork colors, modes, and effects.
+A 22-second look at the taskbar spectrum, artwork colors, modes, and effects,
+using real app footage.
 
 ## Release 1.4.3
 
